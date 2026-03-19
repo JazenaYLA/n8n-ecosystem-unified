@@ -1,164 +1,69 @@
-version: '3.8'
-
-# ============================================================
-# n8n-ecosystem-unified — Full Stack
-# Parity with JazenaYLA/n8n-claw + Proxmox LXC homelab additions
-# Multi-channel (Telegram + WhatsApp), tiered model routing,
-# autonomous email manager, CTI skills (MISP, Wazuh, OpenCTI)
-# ============================================================
+# =============================================================
+# n8n-ecosystem-unified
+# Proxmox LXC homelab edition
+#
+# DATABASE: infra-postgres on CTI LXC (threatlabs-cti-stack)
+#   Set CTI_LXC_IP in .env
+#
+# This compose file contains ONLY n8n stack services.
+# SearXNG runs as a separate Dockge stack (docs/SEARXNG_SETUP.md)
+# Flowise runs in its own LXC via helper script (docs/FLOWISE_SETUP.md)
+# =============================================================
 
 services:
 
   # ── n8n ─────────────────────────────────────────────────────
   n8n:
     image: n8nio/n8n:latest
-    container_name: n8n-unified
+    container_name: n8n
     restart: unless-stopped
     ports:
-      - "5678:5678"
+      - "127.0.0.1:5678:5678"
     environment:
-      - N8N_HOST=${N8N_HOST:-localhost}
+      # Core
+      - N8N_HOST=${N8N_HOST:-n8n.lab.local}
       - N8N_PORT=5678
       - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
-      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678}
-      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://n8n.lab.local}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       - GENERIC_TIMEZONE=${TIMEZONE:-America/Chicago}
       - N8N_LOG_LEVEL=info
       - N8N_SECURE_COOKIE=false
       - N8N_RUNNERS_ENABLED=true
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      # API keys are stored in DB (tools_config table)
-      # and read by workflows at runtime via PostgREST — not as env vars
+      - N8N_METRICS=true
+      - N8N_AI_ENABLED=true
+      # Database — infra-postgres on CTI LXC
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=db
+      - DB_POSTGRESDB_HOST=${CTI_LXC_IP}
       - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=postgres
-      - DB_POSTGRESDB_USER=postgres
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=n8n
+      - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD}
+      # Execution settings
+      - EXECUTIONS_PROCESS=main
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
     volumes:
       - n8n_data:/home/node/.n8n
-    depends_on:
-      db:
-        condition: service_healthy
     networks:
       - unified-net
 
-  # ── PostgreSQL (Supabase image with pgvector) ────────────────
-  db:
-    image: supabase/postgres:15.8.1.085
-    container_name: n8n-unified-db
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5432:5432"
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./supabase/migrations:/docker-entrypoint-initdb.d
-    networks:
-      - unified-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-
-  # ── Supabase REST API (PostgREST) ────────────────────────────
-  rest:
-    image: postgrest/postgrest:v14.5
-    container_name: n8n-unified-rest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
-    environment:
-      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
-      PGRST_DB_SCHEMA: public
-      PGRST_DB_ANON_ROLE: anon
-      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-      PGRST_DB_USE_LEGACY_GUCS: "false"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - unified-net
-
-  # ── Kong (API Gateway — routes /rest/v1 to PostgREST) ───────
-  kong:
-    image: kong:2.8.1
-    container_name: n8n-unified-kong
-    restart: unless-stopped
-    expose:
-      - "8000"
-    environment:
-      KONG_DATABASE: "off"
-      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
-      KONG_DNS_ORDER: LAST,A,CNAME
-      KONG_PLUGINS: request-transformer,cors,key-auth,acl
-    volumes:
-      - ./supabase/kong.deployed.yml:/var/lib/kong/kong.yml:ro
-    depends_on:
-      - rest
-    networks:
-      - unified-net
-
-  # ── Supabase Studio (Web UI) ─────────────────────────────────
-  studio:
-    image: supabase/studio:20250113-83c9420
-    container_name: n8n-unified-studio
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3001:3000"
-    environment:
-      STUDIO_PG_META_URL: http://meta:8080
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      DEFAULT_ORGANIZATION_NAME: n8n-unified
-      DEFAULT_PROJECT_NAME: n8n-unified
-      SUPABASE_URL: http://kong:8000
-      SUPABASE_PUBLIC_URL: http://kong:8000
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
-      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
-      AUTH_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-    depends_on:
-      - meta
-    networks:
-      - unified-net
-
-  # ── Postgres Meta (for Studio) ───────────────────────────────
-  meta:
-    image: supabase/postgres-meta:v0.95.2
-    container_name: n8n-unified-meta
-    restart: unless-stopped
-    environment:
-      PG_META_PORT: 8080
-      PG_META_DB_HOST: db
-      PG_META_DB_PORT: 5432
-      PG_META_DB_USER: postgres
-      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      PG_META_DB_NAME: postgres
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - unified-net
-
-  # ── Email Bridge (IMAP/SMTP REST API) ───────────────────────
+  # ── Email Bridge (IMAP/SMTP REST microservice) ──────────────
   email-bridge:
     build: ./email-bridge
-    container_name: n8n-unified-email-bridge
+    container_name: email-bridge
     restart: unless-stopped
     expose:
       - "3100"
     networks:
       - unified-net
 
-  # ── Crawl4AI (Web Reader — clean markdown from URLs) ─────────
+  # ── Crawl4AI (URL -> clean markdown for n8n Web Reader) ─────
   crawl4ai:
     image: unclecode/crawl4ai:latest
-    container_name: n8n-unified-crawl4ai
+    container_name: crawl4ai
     restart: unless-stopped
     shm_size: "2g"
     deploy:
@@ -168,21 +73,8 @@ services:
     networks:
       - unified-net
 
-  # ── SearXNG (Web Search) ─────────────────────────────────────
-  searxng:
-    image: searxng/searxng:latest
-    container_name: n8n-unified-searxng
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8888:8080"
-    volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
-    networks:
-      - unified-net
-
 volumes:
   n8n_data:
-  db_data:
 
 networks:
   unified-net:
