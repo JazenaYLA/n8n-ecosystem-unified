@@ -1,21 +1,216 @@
 {
-  "_unified_stub": true,
-  "name": "[UNIFIED] Tiered Model Router",
-  "description": "Routes tasks from the main orchestrator to the appropriate model tier (Haiku/Sonnet/Opus) based on complexity scoring. Extends Freddy's sub-agent-runner with Shabbir's Worker Agent 1/2/3 pattern.",
-  "status": "TODO - Phase 3",
-  "design_notes": [
-    "Pre-routing step: complexity evaluation prompt scores task 1-10",
-    "1-3 → Haiku (claude-haiku-4.5) — simple lookup/formatting tasks",
-    "4-7 → Sonnet (claude-sonnet-4.5) — research, analysis, writing",
-    "8-10 → Opus (claude-opus-4.6) — higher-order reasoning, strategy",
-    "Extends Freddy's sub-agent-runner.json (Research/Content/Data) with model-tier awareness",
-    "Shabbir's Worker Agent 1/2/3 already implement this pattern — use as reference",
-    "Expected token cost reduction: ~76% vs always routing to Sonnet"
-  ],
-  "model_tiers": {
-    "haiku": "anthropic/claude-haiku-4.5 via OpenRouter",
-    "sonnet": "anthropic/claude-sonnet-4.5 via OpenRouter",
-    "opus": "anthropic/claude-opus-4.6 via OpenRouter"
+  "name": "[UNIFIED] Tiered Model Router (Sub-Agent Runner)",
+  "_unified_version": "1.0.0",
+  "_doc": "Extends Freddy's sub-agent-runner with Shabbir's Worker Agent 1/2/3 Haiku/Sonnet/Opus pattern. Called by the main agent via the Expert Agent tool. Routes by complexity score: 1-3=Haiku, 4-7=Sonnet, 8-10=Opus. Input: {agent, task, context, complexity}. Output: {result}.",
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
   },
-  "nodes": []
+  "nodes": [
+    {
+      "parameters": { "inputSource": "passthrough" },
+      "id": "wf-trigger",
+      "name": "Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst agent = raw.agent || 'general';\nconst task = raw.task || '';\nconst context = raw.context || '';\nconst explicitComplexity = raw.complexity;\n\n// If no explicit complexity score provided, derive from task heuristics\nlet complexity = explicitComplexity;\nif (!complexity) {\n  const taskLower = task.toLowerCase();\n  // High complexity signals\n  if (/strateg|architect|design|plan|reason|analyze|compar|synthesiz|research|investigat|why|how.{0,20}work/i.test(task)) {\n    complexity = 8;\n  } else if (/summar|explain|draft|write|creat|list|find|search|lookup|format|translat/i.test(task)) {\n    complexity = 5;\n  } else {\n    complexity = 3;\n  }\n}\ncomplexity = Math.max(1, Math.min(10, Number(complexity)));\n\nconst tier = complexity <= 3 ? 'haiku' : complexity <= 7 ? 'sonnet' : 'opus';\nconst model = {\n  haiku: 'anthropic/claude-haiku-4.5',\n  sonnet: 'anthropic/claude-sonnet-4.5',\n  opus: 'anthropic/claude-opus-4-5'\n}[tier];\n\nconst systemPrompt = `You are a specialized ${agent} agent. Be direct, thorough, and precise. Respond in the same language as the task.\n\nContext from the user's conversation:\n${context}`;\n\nreturn [{ json: { agent, task, context, complexity, tier, model, systemPrompt } }];"
+      },
+      "id": "complexity-router",
+      "name": "Complexity Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "haiku",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.tier }}", "rightValue": "haiku", "operator": { "type": "string", "operation": "equals" }, "id": "tier-haiku" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "sonnet",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.tier }}", "rightValue": "sonnet", "operator": { "type": "string", "operation": "equals" }, "id": "tier-sonnet" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "opus",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.tier }}", "rightValue": "opus", "operator": { "type": "string", "operation": "equals" }, "id": "tier-opus" }]
+              },
+              "renameOutput": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "tier-switch",
+      "name": "Tier Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Complexity Router').first().json.task }}",
+        "options": {
+          "systemMessage": "={{ $('Complexity Router').first().json.systemPrompt }}",
+          "maxIterations": 5
+        }
+      },
+      "id": "agent-haiku",
+      "name": "Worker Agent 1 (Haiku)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [720, -160]
+    },
+    {
+      "parameters": {
+        "model": "anthropic/claude-haiku-4.5",
+        "options": { "maxTokens": 2048, "temperature": 0.5 }
+      },
+      "id": "llm-haiku",
+      "name": "LLM: Claude Haiku (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [720, -320],
+      "credentials": { "openRouterApi": { "id": "REPLACE_WITH_YOUR_OPENROUTER_CREDENTIAL_ID", "name": "OpenRouter" } }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Complexity Router').first().json.task }}",
+        "options": {
+          "systemMessage": "={{ $('Complexity Router').first().json.systemPrompt }}",
+          "maxIterations": 8
+        }
+      },
+      "id": "agent-sonnet",
+      "name": "Worker Agent 2 (Sonnet)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {
+        "model": "anthropic/claude-sonnet-4.5",
+        "options": { "maxTokens": 4096, "temperature": 0.7 }
+      },
+      "id": "llm-sonnet",
+      "name": "LLM: Claude Sonnet (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [720, -160],
+      "credentials": { "openRouterApi": { "id": "REPLACE_WITH_YOUR_OPENROUTER_CREDENTIAL_ID", "name": "OpenRouter" } }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Complexity Router').first().json.task }}",
+        "options": {
+          "systemMessage": "={{ $('Complexity Router').first().json.systemPrompt }}",
+          "maxIterations": 10
+        }
+      },
+      "id": "agent-opus",
+      "name": "Worker Agent 3 (Opus)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [720, 160]
+    },
+    {
+      "parameters": {
+        "model": "anthropic/claude-opus-4-5",
+        "options": { "maxTokens": 8192, "temperature": 0.7 }
+      },
+      "id": "llm-opus",
+      "name": "LLM: Claude Opus (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [720, 0],
+      "credentials": { "openRouterApi": { "id": "REPLACE_WITH_YOUR_OPENROUTER_CREDENTIAL_ID", "name": "OpenRouter" } }
+    },
+    {
+      "parameters": {
+        "description": "Search the web. Input: query string.",
+        "jsCode": "let q; try { q = JSON.parse(query).q || query; } catch(e) { q = query; }\nconst r = await helpers.httpRequest({ method:'GET', url:`http://searxng:8080/search?q=${encodeURIComponent(q)}&format=json`, headers:{Accept:'application/json'} });\nreturn (r.results||[]).slice(0,5).map(x=>`${x.title}\\n${x.url}\\n${x.content||''}`).join('\\n\\n') || 'No results.';"
+      },
+      "id": "tool-web-search-haiku",
+      "name": "Web Search (Haiku)",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.2,
+      "position": [960, -320]
+    },
+    {
+      "parameters": {
+        "description": "Search the web. Input: query string.",
+        "jsCode": "let q; try { q = JSON.parse(query).q || query; } catch(e) { q = query; }\nconst r = await helpers.httpRequest({ method:'GET', url:`http://searxng:8080/search?q=${encodeURIComponent(q)}&format=json`, headers:{Accept:'application/json'} });\nreturn (r.results||[]).slice(0,5).map(x=>`${x.title}\\n${x.url}\\n${x.content||''}`).join('\\n\\n') || 'No results.';"
+      },
+      "id": "tool-web-search-sonnet",
+      "name": "Web Search (Sonnet)",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.2,
+      "position": [960, -160]
+    },
+    {
+      "parameters": {
+        "description": "Search the web. Input: query string.",
+        "jsCode": "let q; try { q = JSON.parse(query).q || query; } catch(e) { q = query; }\nconst r = await helpers.httpRequest({ method:'GET', url:`http://searxng:8080/search?q=${encodeURIComponent(q)}&format=json`, headers:{Accept:'application/json'} });\nreturn (r.results||[]).slice(0,5).map(x=>`${x.title}\\n${x.url}\\n${x.content||''}`).join('\\n\\n') || 'No results.';"
+      },
+      "id": "tool-web-search-opus",
+      "name": "Web Search (Opus)",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.2,
+      "position": [960, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const haiku = (() => { try { return $('Worker Agent 1 (Haiku)').first()?.json?.output; } catch(e) { return null; } })();\nconst sonnet = (() => { try { return $('Worker Agent 2 (Sonnet)').first()?.json?.output; } catch(e) { return null; } })();\nconst opus = (() => { try { return $('Worker Agent 3 (Opus)').first()?.json?.output; } catch(e) { return null; } })();\nconst result = opus || sonnet || haiku || 'No output produced.';\nconst tier = $('Complexity Router').first().json.tier;\nconst complexity = $('Complexity Router').first().json.complexity;\nreturn [{ json: { result, tier, complexity } }];"
+      },
+      "id": "collect-result",
+      "name": "Collect Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 0]
+    }
+  ],
+  "connections": {
+    "Workflow Trigger": { "main": [[{ "node": "Complexity Router", "type": "main", "index": 0 }]] },
+    "Complexity Router": { "main": [[{ "node": "Tier Switch", "type": "main", "index": 0 }]] },
+    "Tier Switch": {
+      "main": [
+        [{ "node": "Worker Agent 1 (Haiku)", "type": "main", "index": 0 }],
+        [{ "node": "Worker Agent 2 (Sonnet)", "type": "main", "index": 0 }],
+        [{ "node": "Worker Agent 3 (Opus)", "type": "main", "index": 0 }]
+      ]
+    },
+    "LLM: Claude Haiku (OpenRouter)": { "ai_languageModel": [[{ "node": "Worker Agent 1 (Haiku)", "type": "ai_languageModel", "index": 0 }]] },
+    "LLM: Claude Sonnet (OpenRouter)": { "ai_languageModel": [[{ "node": "Worker Agent 2 (Sonnet)", "type": "ai_languageModel", "index": 0 }]] },
+    "LLM: Claude Opus (OpenRouter)": { "ai_languageModel": [[{ "node": "Worker Agent 3 (Opus)", "type": "ai_languageModel", "index": 0 }]] },
+    "Web Search (Haiku)": { "ai_tool": [[{ "node": "Worker Agent 1 (Haiku)", "type": "ai_tool", "index": 0 }]] },
+    "Web Search (Sonnet)": { "ai_tool": [[{ "node": "Worker Agent 2 (Sonnet)", "type": "ai_tool", "index": 0 }]] },
+    "Web Search (Opus)": { "ai_tool": [[{ "node": "Worker Agent 3 (Opus)", "type": "ai_tool", "index": 0 }]] },
+    "Worker Agent 1 (Haiku)": { "main": [[{ "node": "Collect Result", "type": "main", "index": 0 }]] },
+    "Worker Agent 2 (Sonnet)": { "main": [[{ "node": "Collect Result", "type": "main", "index": 0 }]] },
+    "Worker Agent 3 (Opus)": { "main": [[{ "node": "Collect Result", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "tags": ["unified", "tiered-model", "sub-agent"]
 }
