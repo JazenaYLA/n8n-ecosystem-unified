@@ -1,0 +1,21 @@
+{
+  "_unified_stub": true,
+  "name": "[UNIFIED] Tiered Model Router",
+  "description": "Routes tasks from the main orchestrator to the appropriate model tier (Haiku/Sonnet/Opus) based on complexity scoring. Extends Freddy's sub-agent-runner with Shabbir's Worker Agent 1/2/3 pattern.",
+  "status": "TODO - Phase 3",
+  "design_notes": [
+    "Pre-routing step: complexity evaluation prompt scores task 1-10",
+    "1-3 → Haiku (claude-haiku-4.5) — simple lookup/formatting tasks",
+    "4-7 → Sonnet (claude-sonnet-4.5) — research, analysis, writing",
+    "8-10 → Opus (claude-opus-4.6) — higher-order reasoning, strategy",
+    "Extends Freddy's sub-agent-runner.json (Research/Content/Data) with model-tier awareness",
+    "Shabbir's Worker Agent 1/2/3 already implement this pattern — use as reference",
+    "Expected token cost reduction: ~76% vs always routing to Sonnet"
+  ],
+  "model_tiers": {
+    "haiku": "anthropic/claude-haiku-4.5 via OpenRouter",
+    "sonnet": "anthropic/claude-sonnet-4.5 via OpenRouter",
+    "opus": "anthropic/claude-opus-4.6 via OpenRouter"
+  },
+  "nodes": []
+}

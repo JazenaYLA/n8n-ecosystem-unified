@@ -1,0 +1,21 @@
+{
+  "_unified_stub": true,
+  "name": "[UNIFIED] Multi-Channel Router",
+  "description": "Normalizes messages from Telegram, WhatsApp (Evolution API), Slack, and Discord into a common struct {user_message, system_prompt_details, last_channel} before passing to the main n8n-claw orchestrator agent.",
+  "status": "TODO - Phase 2",
+  "design_notes": [
+    "Based on Shabbir n8nclaw Edit Fields pattern (Edit Fields / Edit Fields1 / Edit Fields2 / Edit Fields3)",
+    "Each channel trigger feeds its own Edit Fields node normalizing to: user_message, system_prompt_details, last_channel",
+    "A Switch node at the response end routes reply back by last_channel value",
+    "Memory keyed on username (not chat ID) for cross-channel continuity",
+    "WhatsApp via Evolution API webhook (Filter1 pattern from Shabbir)",
+    "Telegram trigger + filter pattern from Shabbir (Filter by chat.id)"
+  ],
+  "channels": ["telegram", "whatsapp", "slack", "discord"],
+  "output_struct": {
+    "user_message": "string",
+    "system_prompt_details": "string - username/soul/user fields from init table",
+    "last_channel": "telegram|whatsapp|slack|discord"
+  },
+  "nodes": []
+}
