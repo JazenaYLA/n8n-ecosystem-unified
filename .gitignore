@@ -1,0 +1,13 @@
+.env
+workflows/deployed/
+*.log
+*.bak
+__pycache__/
+.DS_Store
+node_modules/
+scripts/
+.mcp.json
+.claude/
+CLAUDE.local.md
+n8n-claw-templates/
+supabase/kong.deployed.yml
