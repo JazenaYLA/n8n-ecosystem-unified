@@ -1,46 +1,83 @@
 # n8n Configuration Guide
 
-Post-install configuration steps for n8n inside the unified stack.
+Post-install configuration for the n8n LXC (systemd native install).
 **Last updated:** 2026-03-19
 
 ---
 
-## Step 1 — First Boot
+## Current State vs Target State
+
+| | Current (post helper-script install) | Target (after migration) |
+|---|---|---|
+| **Database** | SQLite at `/.n8n/database.sqlite` | PostgreSQL on infra-postgres |
+| **Config file** | `/opt/n8n.env` (4 vars) | `/opt/n8n.env` (full config) |
+| **Vector search** | Not available | pgvector via infra-postgres |
+| **Memory tables** | Not available | Available after migrations |
+
+---
+
+## Step 1 — First Boot (SQLite, pre-migration)
 
 1. Browse to `http://<N8N_LXC_IP>:5678`
 2. Create owner account (email + strong password)
-3. **Settings → API** → **Create API Key** → copy and store securely
+3. **Settings → API** → **Create API Key** → copy and store securely in Infisical
+4. **Settings → Export** → Download backup JSON — save this before migrating to Postgres
 
 ---
 
-## Step 2 — Set n8n Variables
+## Step 2 — Migrate to infra-postgres
 
-**Settings → Variables → Add Variable** for each:
+> **See `docs/ANTIGRAVITY_RECONFIGURE.md`** for the complete migration
+> playbook including pre-checks, `/opt/n8n.env` full target content,
+> connectivity tests, and the Antigravity task summary.
 
-| Variable | Example Value | Notes |
+Short version — on the n8n LXC as root:
+
+```bash
+# Clone this repo
+git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git /tmp/n8n-unified
+
+# Run migration script (interactive — prompts for DB password and all URLs)
+bash /tmp/n8n-unified/migrate-to-postgres.sh
+```
+
+The migration script:
+- Tests connectivity to infra-postgres before making any changes
+- Backs up `/.n8n/database.sqlite`
+- Appends all DB + config vars to `/opt/n8n.env`
+- Restarts n8n and verifies it comes up on Postgres
+
+---
+
+## Step 3 — Set n8n Variables
+
+After migration, in n8n UI: **Settings → Variables → Add Variable**
+
+Mirror these from `/opt/n8n.env` into n8n Variables so workflows
+can access them via `$vars.VARIABLE_NAME`:
+
+| Variable | Source | Notes |
 |---|---|---|
-| `POSTGREST_URL` | `http://postgrest.lab.local` | PostgREST REST API |
-| `N8N_POSTGREST_JWT_SECRET` | `<from infra/.env>` | Same value as CTI infra stack |
-| `MISP_URL` | `https://misp.lab.local` | |
-| `MISP_API_KEY` | `<key>` | MISP → Administration → Auth Keys |
-| `OPENCTI_URL` | `https://opencti.lab.local` | |
-| `OPENCTI_API_KEY` | `<key>` | OpenCTI → Profile → API Access |
-| `THEHIVE_URL` | `https://thehive.lab.local` | |
-| `THEHIVE_API_KEY` | `<key>` | TheHive → Organisation → API Key |
-| `CORTEX_URL` | `https://cortex.lab.local` | |
-| `CORTEX_API_KEY` | `<key>` | Cortex → Organisation → API Key |
-| `WAZUH_URL` | `https://wazuh.lab.local:55000` | |
-| `WAZUH_USER` | `wazuh` | |
-| `WAZUH_PASSWORD` | `<password>` | |
-| `FLOWISE_URL` | `https://flowise.lab.local` | |
-| `SEARXNG_URL` | `http://searxng:8888` | Internal Docker name |
-| `TELEGRAM_CHAT_ID` | `<id>` | From `@userinfobot` on Telegram |
-| `EVOLUTION_INSTANCE_NAME` | `<instance>` | WhatsApp Evolution API |
-| `OLLAMA_URL` | `http://<PROXMOX_HOST_IP>:11434` | If running Ollama on host |
+| `MISP_URL` | `/opt/n8n.env` | e.g. `https://misp.lab.local` |
+| `MISP_API_KEY` | Infisical / enterprise secrets | MISP → Administration → Auth Keys |
+| `OPENCTI_URL` | `/opt/n8n.env` | |
+| `OPENCTI_API_KEY` | Infisical | OpenCTI → Profile → API Access |
+| `THEHIVE_URL` | `/opt/n8n.env` | |
+| `THEHIVE_API_KEY` | Infisical | TheHive → Organisation → API Key |
+| `CORTEX_URL` | `/opt/n8n.env` | |
+| `CORTEX_API_KEY` | Infisical | |
+| `WAZUH_URL` | `/opt/n8n.env` | e.g. `https://wazuh.lab.local:55000` |
+| `WAZUH_USER` | Infisical | |
+| `WAZUH_PASSWORD` | Infisical | |
+| `FLOWISE_URL` | `/opt/n8n.env` | e.g. `https://flowise.lab.local` |
+| `SEARXNG_URL` | `/opt/n8n.env` | e.g. `http://searxng.lab.local` |
+| `OLLAMA_URL` | `/opt/n8n.env` | e.g. `http://<HOST>:11434` |
+| `TELEGRAM_CHAT_ID` | Infisical | From `@userinfobot` |
+| `EVOLUTION_INSTANCE_NAME` | Infisical | WhatsApp instance name |
 
 ---
 
-## Step 3 — Create Credentials
+## Step 4 — Create Credentials
 
 **Settings → Credentials → New Credential**
 
@@ -49,17 +86,17 @@ Create each with the **exact name shown** — workflow JSONs reference credentia
 ### Messaging
 | Name | Type | Key Field |
 |---|---|---|
-| `Telegram Bot` | Telegram API | Bot Token |
-| `Evolution API` | HTTP Header Auth | `apikey: <key>` |
+| `Telegram Bot` | Telegram API | Bot Token from `/opt/n8n.env` |
+| `Evolution API` | HTTP Header Auth | `apikey: <EVOLUTION_API_KEY>` |
 
 ### LLM Providers
 | Name | Type | Notes |
 |---|---|---|
 | `Anthropic API` | Anthropic API | Claude models |
 | `Google Gemini` | Google Gemini API | Gemini Flash/Pro |
-| `OpenRouter` | HTTP Header Auth | `Authorization: Bearer sk-or-...` |
+| `OpenRouter` | HTTP Header Auth | `Authorization: Bearer <OPENROUTER_API_KEY>` |
 | `OpenAI API` | OpenAI API | GPT-4o etc. |
-| `Ollama Local` | HTTP Request (no auth) | Base URL: `http://<HOST>:11434` |
+| `Ollama Local` | OpenAI-compatible | Base URL: `http://<HOST>:11434/v1`, any placeholder key |
 | `Mistral API` | HTTP Header Auth | `Authorization: Bearer <key>` |
 
 ### CTI Platforms
@@ -72,91 +109,95 @@ Create each with the **exact name shown** — workflow JSONs reference credentia
 | `Wazuh API` | HTTP Request (basic auth) | User + Password |
 | `Flowise API` | HTTP Header Auth | `Authorization: Bearer <key>` |
 
-### Database & Email
+### Database
 | Name | Type | Details |
 |---|---|---|
-| `n8n Postgres` | Postgres | Host: CTI_LXC_IP, DB: n8n, User: n8n |
-| `Gmail OAuth2` | Gmail OAuth2 | Client ID + Secret |
-| `Stalwart Mail` | IMAP + SMTP | Host: mail.lab.local |
+| `n8n Postgres` | Postgres | Host: dockge-cti LXC IP, DB: `n8n`, User: `n8n` |
 
 ---
 
-## Step 4 — Run DB Migrations
+## Step 5 — Run DB Migrations
 
-From the **CTI LXC terminal**:
+> **Prerequisites:** infra-postgres must be running `pgvector/pgvector:pg17`
+> image (not `postgres:17-alpine`). See `docs/PROXMOX_SETUP.md`.
+
+From **dockge-cti LXC** (where infra-postgres runs as a Docker container):
 
 ```bash
-# Run all three migration files against infra-postgres n8n database
+git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git /tmp/n8n-unified
+
 for sql in 000_extensions.sql 001_schema.sql 002_seed.sql; do
+  echo "Applying: $sql"
   docker exec -i infra-postgres psql -U n8n -d n8n \
-    < /path/to/n8n-ecosystem-unified/supabase/migrations/$sql
-  echo "Applied: $sql"
+    < /tmp/n8n-unified/migrations/$sql
 done
 ```
 
-Or from within n8n using an **Execute Command** node (if the migration
-files are accessible from the n8n LXC):
+Or from the **n8n LXC** with psql client:
 
 ```bash
-psql -h <CTI_LXC_IP> -U n8n -d n8n -f /opt/stacks/n8n-unified/supabase/migrations/000_extensions.sql
-psql -h <CTI_LXC_IP> -U n8n -d n8n -f /opt/stacks/n8n-unified/supabase/migrations/001_schema.sql
-psql -h <CTI_LXC_IP> -U n8n -d n8n -f /opt/stacks/n8n-unified/supabase/migrations/002_seed.sql
+apt-get install -y postgresql-client
+
+for sql in 000_extensions.sql 001_schema.sql 002_seed.sql; do
+  psql -h <DOCKGE_CTI_LXC_IP> -U n8n -d n8n \
+    -f /tmp/n8n-unified/migrations/$sql
+done
+```
+
+Verify tables were created:
+```bash
+docker exec infra-postgres psql -U n8n -d n8n -c '\dt public.*'
 ```
 
 ---
 
-## Step 5 — Import Workflows
+## Step 6 — Import Workflows
 
-In n8n UI → **Workflows → Import from File**, import in this order:
+In n8n UI → **Workflows → Import from File**:
 
 1. `workflows/unified/multi-channel-router.json`
 2. `workflows/unified/tiered-model-router.json`
 3. `workflows/unified/email-manager.json`
-4. `workflows/unified/cti/misp-ioc-lookup.json` (when available)
-5. Any templates from `n8n-claw-templates` repo
+4. CTI skill workflows (from `n8n-claw-templates` when available)
 
-After import, activate each workflow using the toggle in the workflow list.
+After import, activate each workflow via the toggle in the workflow list.
 
 ---
 
-## Step 6 — Tiered Model Router Configuration
-
-The tiered model router supports any combination of providers.
-Edit the `tiered-model-router.json` workflow's **Switch** node to point
-to your preferred credential names for each tier:
+## Step 7 — Tiered Model Router
 
 | Tier | Score | Default Provider | Credential Name |
 |---|---|---|---|
 | Fast / Local | 1–3 | Ollama (local) | `Ollama Local` |
-| Mid | 4–6 | Gemini Flash or Haiku | `Google Gemini` |
-| Heavy | 7–10 | Claude Sonnet or GPT-4o | `Anthropic API` |
+| Mid | 4–6 | Gemini Flash | `Google Gemini` |
+| Heavy | 7–10 | Claude Sonnet | `Anthropic API` |
 
-To use **OpenRouter** as a unified gateway for all tiers instead:
-- Point all three tiers to `OpenRouter` credential
-- Set the model name per tier in the HTTP Request body:
-  - Tier 1: `meta-llama/llama-3.1-8b-instruct:free`
-  - Tier 2: `google/gemini-flash-1.5`
-  - Tier 3: `anthropic/claude-sonnet-4-5`
+To use **OpenRouter** as a unified gateway for all tiers:
+- Set all three tiers to `OpenRouter` credential
+- Tier 1 model: `meta-llama/llama-3.1-8b-instruct:free`
+- Tier 2 model: `google/gemini-flash-1.5`
+- Tier 3 model: `anthropic/claude-sonnet-4-5`
 
 ---
 
-## Ollama Setup (Optional — Local LLM)
-
-If you want a fully local LLM tier, install Ollama on the Proxmox host
-or a dedicated VM:
+## Useful Service Commands
 
 ```bash
-# On Proxmox host (or separate LXC/VM)
-curl -fsSL https://ollama.ai/install.sh | sh
+# Check n8n status
+systemctl status n8n
 
-# Pull a model
-ollama pull llama3.2
-ollama pull nomic-embed-text  # for embeddings
+# View live logs
+journalctl -u n8n -f
 
-# Verify API
-curl http://localhost:11434/api/tags
+# View last 50 log lines
+journalctl -u n8n -n 50 --no-pager
+
+# Restart after env changes
+systemctl daemon-reload && systemctl restart n8n
+
+# Check current env
+cat /opt/n8n.env
+
+# Update n8n to latest version
+bash -c "$(curl -fsSL https://github.com/community-scripts/ProxmoxVE/raw/main/ct/n8n.sh)" -- --update
 ```
-
-In n8n Variables, set `OLLAMA_URL=http://<HOST_IP>:11434`.
-Ollama is compatible with n8n's **OpenAI-compatible** credential type —
-use base URL `http://<HOST_IP>:11434/v1` with any placeholder API key.
