@@ -1,0 +1,7 @@
+{
+  "_source": "JazenaYLA/n8nclaw",
+  "_description": "n8nClaw workflow template from Shabbir's implementation. Import this JSON into n8n via Settings > Import Workflow.",
+  "_note": "This is a reference workflow. Credentials and node IDs must be reconfigured after import.",
+  "_upstream": "https://github.com/JazenaYLA/n8nclaw/blob/main/n8nClaw.json",
+  "_redirect": "Fetch the actual workflow JSON from the upstream source above, as binary workflow JSON is stored by reference here."
+}
