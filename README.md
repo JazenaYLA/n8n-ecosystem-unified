@@ -1,184 +1,199 @@
 # n8n-ecosystem-unified
 
-> A unified n8n AI agent stack combining the best of [JazenaYLA/n8n-claw](https://github.com/JazenaYLA/n8n-claw) (n8n-claw) and Shabbir's OpenCLAW multi-channel patterns.
-> Designed for **Proxmox LXC homelabs** with Caddy TLS, multi-channel messaging, tiered model routing, autonomous email management, and CTI (Cyber Threat Intelligence) integration.
+A self-hosted n8n AI agent and CTI automation stack for **Proxmox VE homelabs**.
+Designed to integrate natively with [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack).
 
----
-
-## What's Inside
-
-| Component | Description |
-|---|---|
-| **Multi-Channel Router** | Telegram + WhatsApp (Evolution API) normalized to same `{userMessage, chatId, userId, source}` struct |
-| **Tiered Model Router** | Routes tasks to Haiku / Sonnet / Opus by complexity score (1–10) |
-| **Email Manager** | Autonomous Gmail manager with safety guardrails (draft + Telegram notify for sensitive replies) |
-| **CTI Skills** | MISP, Wazuh, OpenCTI, TheHive, Cortex integration workflows (in `docs/CTI_SKILLS_ROADMAP.md`) |
-| **Supabase Stack** | Full self-hosted Supabase (Postgres + pgvector + PostgREST + Kong + Studio) |
-| **SearXNG** | Private web search engine (Google + Bing + DuckDuckGo + Brave) |
-| **email-bridge** | Stateless IMAP/SMTP REST microservice for non-Gmail email workflows |
-| **Crawl4AI** | Web content reader — returns clean markdown from any URL |
-
----
-
-## vs. n8n-claw
-
-| Feature | n8n-claw | n8n-ecosystem-unified |
-|---|---|---|
-| Messaging channels | Telegram only | Telegram + WhatsApp (Evolution API) |
-| Model routing | Single model | Haiku / Sonnet / Opus by complexity |
-| Email | email-bridge (IMAP/SMTP) | email-bridge + autonomous Gmail manager |
-| Reverse proxy | Nginx + certbot | **Caddy** (auto TLS, no certbot) |
-| Target platform | Bare VPS (Ubuntu/Debian) | **Proxmox LXC** (Debian 12) |
-| CTI integration | — | MISP, Wazuh, OpenCTI, TheHive, Cortex |
-| DB schema extras | Core tables | + `email_log`, `channel_sessions`, `cti_events` |
-| Seed locale | German | English |
-
----
-
-## Quick Start
-
-### Prerequisites
-- Proxmox VE host with a Debian 12 LXC (see `docs/PROXMOX_SETUP.md`)
-- LXC created with `--features nesting=1` (required for Docker)
-- A domain pointing to your public IP (or local DNS override for homelab)
-
-### 1. Clone the repo inside the LXC
-
-```bash
-git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git
-cd n8n-ecosystem-unified
-```
-
-### 2. Run setup
-
-```bash
-sudo bash setup.sh
-```
-
-The interactive installer will:
-- Install Docker and Caddy
-- Collect all required credentials interactively
-- Generate secrets (`N8N_ENCRYPTION_KEY`, `SUPABASE_JWT_SECRET`, `POSTGRES_PASSWORD`, etc.)
-- Write `.env` and `supabase/kong.deployed.yml`
-- Start the full Docker stack
-- Configure Caddy for HTTPS
-
-### 3. Open n8n
-
-```
-https://your-n8n-domain.com
-```
-
-Complete initial account setup, then generate your API key under **Settings → API**.
-
-### 4. Import workflows
-
-Import these via **n8n UI → Import Workflow** in order:
-
-1. `workflows/unified/multi-channel-router.json`
-2. `workflows/unified/tiered-model-router.json`
-3. `workflows/unified/email-manager.json`
-4. `workflows/freddy/n8n-claw-agent.json` (main orchestrator)
-5. Any CTI skill workflows from `workflows/unified/cti/`
-
-### 5. Set n8n Variables
-
-In n8n → **Settings → Variables**, add:
-
-| Variable | Value |
-|---|---|
-| `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
-| `EVOLUTION_INSTANCE_NAME` | Your Evolution API instance (WhatsApp) |
-| `WHATSAPP_PHONE` | Your WhatsApp number (digits only) |
-| `SUPABASE_URL` | `http://kong:8000` |
-| `SUPABASE_SERVICE_KEY` | From your `.env` |
-
-### 6. Create n8n Credentials
-
-Create credentials with **exactly these names** (must match workflow JSON):
-
-| Credential Name | Type |
-|---|---|
-| `Telegram Bot` | Telegram API |
-| `OpenRouter` | OpenRouter API |
-| `Google AI` | Google PaLM API |
-| `Anthropic API` | Anthropic API |
-| `Supabase Postgres` | Postgres |
-| `Gmail` | Gmail OAuth2 |
-| `Evolution API` | HTTP Header Auth |
-
----
-
-## Repository Structure
-
-```
-n8n-ecosystem-unified/
-├── docker-compose.yml          # Full stack definition
-├── setup.sh                    # Interactive installer (Proxmox LXC edition)
-├── .env.example                # All environment variables documented
-├── .gitignore
-├── email-bridge/               # IMAP/SMTP REST microservice
-│   ├── Dockerfile
-│   ├── package.json
-│   └── server.js
-├── searxng/
-│   └── settings.yml             # SearXNG engine config
-├── supabase/
-│   ├── kong.yml                 # Kong gateway template (run setup.sh to deploy)
-│   └── migrations/
-│       ├── 000_extensions.sql   # Roles + uuid-ossp
-│       ├── 001_schema.sql       # Full schema (pgvector, all tables, RPC)
-│       └── 002_seed.sql         # Default soul, agents, tools_config entries
-├── workflows/
-│   ├── freddy/                  # Upstream n8n-claw workflows (reference)
-│   └── unified/                 # New unified workflows
-│       ├── multi-channel-router.json
-│       ├── tiered-model-router.json
-│       └── email-manager.json
-└── docs/
-    ├── PROXMOX_SETUP.md         # Detailed LXC deployment guide
-    └── CTI_SKILLS_ROADMAP.md    # Planned CTI skill workflows
-```
+This is a **ground-up original project** — not derived from any upstream fork.
+It uses the MCP skill pattern pioneered by the n8n community, adapted for a
+zero-trust, multi-LXC Proxmox homelab with CTI-first workflows.
 
 ---
 
 ## Architecture
 
 ```
-[Telegram] ──┐
-             ├──► [multi-channel-router] ──► {userMessage, chatId, userId, source}
-[WhatsApp] ──┘                                        │
-                                                       ▼
-                                          [n8n-claw Agent (main)]
-                                                       │
-                                    ┌──────────────────┼──────────────────┐
-                                    ▼                  ▼                  ▼
-                          [Web Search]     [Expert Agent]        [CTI Tools]
-                          [Crawl4AI]       [Tiered Router]       [MISP/Wazuh]
-                          [Email Bridge]   Haiku/Sonnet/Opus     [OpenCTI]
-                                                                  [TheHive]
-                                    └──────────────────┼──────────────────┘
-                                                       ▼
-                                         [Response Router]
-                                          /           \
-                                   [Telegram]     [WhatsApp]
+┌─────────────────────────────────────────────────────────────────┐
+│  PROXMOX VE HOST                                                 │
+│                                                                  │
+│  ┌─────────────┐  ┌──────────────────────┐  ┌───────────────┐  │
+│  │  Caddy LXC  │  │      CTI LXC         │  │   n8n LXC     │  │
+│  │             │  │  (threatlabs-cti)    │  │               │  │
+│  │ :80/:443    │  │  infra-postgres      │  │  n8n :5678    │  │
+│  │ :2019 API   │  │  infra-postgrest     │  │  email-bridge │  │
+│  │ CaddyManager│  │  infra-pgadmin       │  │  crawl4ai     │  │
+│  │ CaddyGen    │  │  es7/es8, valkey     │  │               │  │
+│  └──────┬──────┘  │  MISP, OpenCTI       │  └───────────────┘  │
+│         │         │  TheHive, Cortex      │                      │
+│         │         │  Shuffle, DFIR-IRIS   │  ┌───────────────┐  │
+│         │         └──────────────────────┘  │  SearXNG LXC  │  │
+│         │                                    │  (Dockge stk) │  │
+│         │                                    │  :8888        │  │
+│         │                                    └───────────────┘  │
+│         │                                    ┌───────────────┐  │
+│         │                                    │  Flowise LXC  │  │
+│         │                                    │  (helper-scr) │  │
+│         │                                    │  :3000        │  │
+│         │                                    └───────────────┘  │
+│                                                                  │
+│  DNS: *.lab.local CNAMEs → caddy.lab.local (single A record)    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Integration model:** n8n workflows call CTI tools over HTTP API using
+`*.lab.local` Caddy domain names. No shared Docker networks across LXC
+boundaries — all cross-LXC communication is via HTTP/REST.
+
+---
+
+## Stack Components
+
+| Component | Where | Purpose |
+|---|---|---|
+| **n8n** | n8n LXC — Dockge | Orchestration, automation, MCP skill host |
+| **email-bridge** | n8n LXC — Dockge | IMAP/SMTP REST microservice |
+| **crawl4ai** | n8n LXC — Dockge | Web page → clean markdown |
+| **SearXNG** | Separate Dockge stack | Private web search (JSON API) |
+| **Flowise** | Dedicated LXC (helper script) | Conversational AI / RAG chatflows |
+| **infra-postgres (pgvector)** | CTI LXC — infra stack | Shared DB: n8n, Flowise, OpenClaw |
+| **infra-postgrest** | CTI LXC — infra stack | REST API over n8n database |
+| **infra-pgadmin** | CTI LXC — infra stack | Database management UI |
+| **MISP** | CTI LXC | Malware Information Sharing Platform |
+| **OpenCTI** | CTI LXC | Threat intelligence platform |
+| **TheHive** | CTI LXC | Case management |
+| **Cortex** | CTI LXC | Observable analysis/enrichment |
+| **Wazuh** | Wazuh LXC | SIEM / EDR |
+
+---
+
+## Multi-LLM Support
+
+This stack is **LLM-agnostic**. All model calls are routed through n8n's
+native credential system. Supported providers:
+
+| Provider | n8n Credential Type | Local/Cloud |
+|---|---|---|
+| **Ollama** | HTTP Request (no auth) | ☁️ Local — runs on Proxmox host or LXC |
+| **Gemini / Google AI** | Google PaLM / Gemini API | ☁️ Cloud |
+| **Anthropic Claude** | Anthropic API | ☁️ Cloud |
+| **OpenRouter** | HTTP Header Auth | ☁️ Cloud (multi-model gateway) |
+| **OpenAI** | OpenAI API | ☁️ Cloud |
+| **LM Studio** | HTTP Request (OpenAI-compat.) | 🏠 Local |
+| **Mistral** | HTTP Header Auth | ☁️ Cloud |
+
+The **Tiered Model Router** workflow selects provider by task complexity
+(score 1–10): Ollama/local for score ≤3, mid-tier (Gemini Flash/Haiku)
+for 4–6, heavyweight (Claude Sonnet/Opus, GPT-4o) for ≥7.
+
+---
+
+## Quick Start
+
+### Prerequisites
+- Proxmox VE host with:
+  - `threatlabs-cti-stack` enterprise branch deployed on CTI LXC
+  - Caddy LXC running with CaddyManager
+  - UniFi (or equivalent) local DNS for `*.lab.local`
+- See `docs/PROXMOX_SETUP.md` for n8n LXC creation
+- See `docs/FLOWISE_SETUP.md` for Flowise LXC creation
+
+### Step 1 — Create n8n LXC
+
+On Proxmox host:
+```bash
+# Option A: Proxmox helper script (recommended)
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct/docker.sh)"
+# Set hostname: n8n-unified, RAM: 4096MB, Cores: 4, Disk: 32GB
+```
+
+Or manual:
+```bash
+pct create 200 local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst \
+  --hostname n8n-unified --memory 4096 --cores 4 \
+  --rootfs local-lvm:32 --net0 name=eth0,bridge=vmbr0,ip=dhcp \
+  --features nesting=1 --unprivileged 1
+pct start 200
+```
+
+### Step 2 — Deploy n8n Stack via Dockge
+
+Inside the n8n LXC:
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+
+# Clone repo into Dockge stacks directory
+git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git /opt/stacks/n8n-unified
+cd /opt/stacks/n8n-unified
+
+# Copy and fill env
+cp .env.example .env
+nano .env   # fill CTI_LXC_IP, N8N_DB_PASSWORD, LLM keys
+
+# Generate secrets
+echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+echo "N8N_POSTGREST_JWT_SECRET=$(openssl rand -hex 32)"
+
+# Start
+docker compose up -d
+```
+
+### Step 3 — Deploy SearXNG (separate Dockge stack)
+
+See `docs/SEARXNG_SETUP.md`.
+
+### Step 4 — n8n First-Boot Setup
+
+1. Browse to `http://<N8N_LXC_IP>:5678` (or `http://n8n.lab.local` after DNS)
+2. Create owner account
+3. **Settings → API** → Create API Key → copy it
+4. Set Variables (Settings → Variables) — see `docs/N8N_CONFIGURATION.md`
+5. Create Credentials — see `docs/N8N_CONFIGURATION.md`
+6. Run DB migrations — see `docs/N8N_CONFIGURATION.md`
+7. Import workflows from `workflows/unified/`
+
+### Step 5 — Add Caddy Routes
+
+In CaddyManager UI, add routes from `docs/CADDY_ROUTES.md`.
+
+### Step 6 — Add DNS Records
+
+In UniFi (or router) local DNS:
+```
+n8n.lab.local       CNAME  caddy.lab.local
+flowise.lab.local   CNAME  caddy.lab.local
+searxng.lab.local   CNAME  caddy.lab.local
+postgrest.lab.local CNAME  caddy.lab.local
+pgadmin.lab.local   CNAME  caddy.lab.local
 ```
 
 ---
 
-## Upgrading from n8n-claw
+## Related Repositories
 
-If you have an existing n8n-claw deployment:
+| Repo | Purpose |
+|---|---|
+| [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack) | CTI platform stack (enterprise branch for Proxmox) |
+| [n8n-claw-templates](https://github.com/JazenaYLA/n8n-claw-templates) | n8n MCP skill template library (CTI + general) |
 
-1. Export your n8n-claw `.env` values
-2. Run `setup.sh` in this repo — it generates new secrets but prompts for all credential values
-3. Your existing Supabase data is **not affected** unless you drop and recreate the DB
-4. The unified `001_schema.sql` adds 3 new tables (`email_log`, `channel_sessions`, `cti_events`) via `CREATE TABLE IF NOT EXISTS` — safe to run against an existing n8n-claw schema
+---
+
+## Flowise Integration
+
+Flowise runs in its own dedicated LXC (installed via Proxmox helper script)
+and integrates with n8n at three points:
+
+1. **n8n as gateway, Flowise as RAG brain** — complex queries (score ≥7)
+   are forwarded to a Flowise chatflow via `POST /api/v1/prediction/<id>`
+2. **CTI document RAG** — Flowise ingests MISP/OpenCTI reports into
+   pgvector and answers n8n queries about threat actors, IOCs, TTPs
+3. **Flowise → n8n webhooks** — Flowise custom tool nodes trigger n8n
+   workflows (e.g., create TheHive case from chat finding)
+
+See `docs/FLOWISE_SETUP.md` for full setup and integration patterns.
 
 ---
 
 ## Credits
 
-- **n8n-claw** by [@freddy-schuetz](https://github.com/freddy-schuetz/n8n-claw) / [JazenaYLA fork](https://github.com/JazenaYLA/n8n-claw) — core agent architecture
-- **OpenCLAW** by Shabbir (n8n community) — multi-channel routing and tiered model patterns
-- **Proxmox LXC adaptation** by [@JazenaYLA](https://github.com/JazenaYLA)
+Original project by [@JazenaYLA](https://github.com/JazenaYLA).
+MCP skill pattern inspired by the broader n8n community.
