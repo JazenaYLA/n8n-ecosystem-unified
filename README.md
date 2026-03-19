@@ -3,9 +3,10 @@
 A self-hosted n8n AI agent and CTI automation stack for **Proxmox VE homelabs**.
 Designed to integrate natively with [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack).
 
-This is a **ground-up original project** — not derived from any upstream fork.
-It uses the MCP skill pattern pioneered by the n8n community, adapted for a
-zero-trust, multi-LXC Proxmox homelab with CTI-first workflows.
+n8n is installed as a **native systemd service** on a dedicated LXC using the
+[Proxmox community helper script](https://github.com/community-scripts/ProxmoxVE/blob/main/ct/n8n.sh).
+This repo provides configuration guides, migration scripts, and workflow files —
+not a Docker deployment.
 
 ---
 
@@ -16,23 +17,23 @@ zero-trust, multi-LXC Proxmox homelab with CTI-first workflows.
 │  PROXMOX VE HOST                                                 │
 │                                                                  │
 │  ┌─────────────┐  ┌──────────────────────┐  ┌───────────────┐  │
-│  │  Caddy LXC  │  │      CTI LXC         │  │   n8n LXC     │  │
+│  │  caddy LXC  │  │    dockge-cti LXC    │  │   n8n LXC     │  │
 │  │             │  │  (threatlabs-cti)    │  │               │  │
-│  │ :80/:443    │  │  infra-postgres      │  │  n8n :5678    │  │
-│  │ :2019 API   │  │  infra-postgrest     │  │  email-bridge │  │
-│  │ CaddyManager│  │  infra-pgadmin       │  │  crawl4ai     │  │
-│  │ CaddyGen    │  │  es7/es8, valkey     │  │               │  │
-│  └──────┬──────┘  │  MISP, OpenCTI       │  └───────────────┘  │
-│         │         │  TheHive, Cortex      │                      │
-│         │         │  Shuffle, DFIR-IRIS   │  ┌───────────────┐  │
-│         │         └──────────────────────┘  │  SearXNG LXC  │  │
-│         │                                    │  (Dockge stk) │  │
-│         │                                    │  :8888        │  │
+│  │ :80/:443    │  │                      │  │  systemd n8n  │  │
+│  │ *.lab.local │  │  infra-postgres:5432 │  │  :5678        │  │
+│  │             │  │  infra-valkey:6379   │◄─┤               │  │
+│  └──────┬──────┘  │  es7/es8             │  │  /opt/n8n.env │  │
+│         │         │                      │  └───────────────┘  │
+│         │         │  misp, opencti       │                      │
+│         │         │  thehive, dfir-iris  │  ┌───────────────┐  │
+│         │         │  flowintel, lacus    │  │  flowise LXC  │  │
+│         │         └──────────────────────┘  │  systemd      │  │
+│         │                                    │  :3000        │  │
 │         │                                    └───────────────┘  │
 │         │                                    ┌───────────────┐  │
-│         │                                    │  Flowise LXC  │  │
-│         │                                    │  (helper-scr) │  │
-│         │                                    │  :3000        │  │
+│         │                                    │  wazuh LXC    │  │
+│         │                                    │  + forgejo    │  │
+│         │                                    │  + others     │  │
 │         │                                    └───────────────┘  │
 │                                                                  │
 │  DNS: *.lab.local CNAMEs → caddy.lab.local (single A record)    │
@@ -40,131 +41,174 @@ zero-trust, multi-LXC Proxmox homelab with CTI-first workflows.
 ```
 
 **Integration model:** n8n workflows call CTI tools over HTTP API using
-`*.lab.local` Caddy domain names. No shared Docker networks across LXC
-boundaries — all cross-LXC communication is via HTTP/REST.
+`*.lab.local` Caddy domain names. All cross-LXC communication is via
+HTTP/REST. n8n connects directly to `infra-postgres` on the dockge-cti
+LXC over port 5432 on the shared VLAN.
 
 ---
 
-## Stack Components
+## Repo Contents
 
-| Component | Where | Purpose |
-|---|---|---|
-| **n8n** | n8n LXC — Dockge | Orchestration, automation, MCP skill host |
-| **email-bridge** | n8n LXC — Dockge | IMAP/SMTP REST microservice |
-| **crawl4ai** | n8n LXC — Dockge | Web page → clean markdown |
-| **SearXNG** | Separate Dockge stack | Private web search (JSON API) |
-| **Flowise** | Dedicated LXC (helper script) | Conversational AI / RAG chatflows |
-| **infra-postgres (pgvector)** | CTI LXC — infra stack | Shared DB: n8n, Flowise, OpenClaw |
-| **infra-postgrest** | CTI LXC — infra stack | REST API over n8n database |
-| **infra-pgadmin** | CTI LXC — infra stack | Database management UI |
-| **MISP** | CTI LXC | Malware Information Sharing Platform |
-| **OpenCTI** | CTI LXC | Threat intelligence platform |
-| **TheHive** | CTI LXC | Case management |
-| **Cortex** | CTI LXC | Observable analysis/enrichment |
-| **Wazuh** | Wazuh LXC | SIEM / EDR |
+| Path | Purpose |
+|---|---|
+| `migrate-to-postgres.sh` | Interactive migration script — moves n8n from SQLite to infra-postgres |
+| `migrations/` | SQL migration files run against infra-postgres after migration |
+| `workflows/unified/` | n8n workflow JSON files ready to import |
+| `docs/ANTIGRAVITY_RECONFIGURE.md` | **Full playbook for automated reconfiguration** |
+| `docs/PROXMOX_SETUP.md` | LXC install guide for all services |
+| `docs/N8N_CONFIGURATION.md` | Post-install n8n configuration (Variables, Credentials, migrations) |
+| `docs/FLOWISE_SETUP.md` | Flowise LXC setup and n8n integration |
+| `docs/CADDY_ROUTES.md` | Caddy reverse proxy routes for `*.lab.local` |
+| `docs/SEARXNG_SETUP.md` | SearXNG private search setup |
+| `docs/COMPARISON.md` | n8n-claw vs OpenClaw feature comparison |
 
 ---
 
-## Multi-LLM Support
+## Current State vs Target State
 
-This stack is **LLM-agnostic**. All model calls are routed through n8n's
-native credential system. Supported providers:
-
-| Provider | n8n Credential Type | Local/Cloud |
+| | Current (post helper-script install) | Target (after migration) |
 |---|---|---|
-| **Ollama** | HTTP Request (no auth) | ☁️ Local — runs on Proxmox host or LXC |
-| **Gemini / Google AI** | Google PaLM / Gemini API | ☁️ Cloud |
-| **Anthropic Claude** | Anthropic API | ☁️ Cloud |
-| **OpenRouter** | HTTP Header Auth | ☁️ Cloud (multi-model gateway) |
-| **OpenAI** | OpenAI API | ☁️ Cloud |
-| **LM Studio** | HTTP Request (OpenAI-compat.) | 🏠 Local |
-| **Mistral** | HTTP Header Auth | ☁️ Cloud |
-
-The **Tiered Model Router** workflow selects provider by task complexity
-(score 1–10): Ollama/local for score ≤3, mid-tier (Gemini Flash/Haiku)
-for 4–6, heavyweight (Claude Sonnet/Opus, GPT-4o) for ≥7.
+| **Database** | SQLite at `/.n8n/database.sqlite` | PostgreSQL on infra-postgres |
+| **Config** | `/opt/n8n.env` (4 vars) | `/opt/n8n.env` (full config) |
+| **Vector search** | Not available | pgvector via infra-postgres |
+| **n8n memory** | Not available | Available after DB migrations |
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-- Proxmox VE host with:
-  - `threatlabs-cti-stack` enterprise branch deployed on CTI LXC
-  - Caddy LXC running with CaddyManager
-  - UniFi (or equivalent) local DNS for `*.lab.local`
-- See `docs/PROXMOX_SETUP.md` for n8n LXC creation
-- See `docs/FLOWISE_SETUP.md` for Flowise LXC creation
 
-### Step 1 — Create n8n LXC
+- Proxmox VE host with `threatlabs-cti-stack` running on a dockge-cti LXC
+- `infra` stack running (`infra-postgres` healthy) — see [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack)
+- n8n LXC already installed via helper script (see below)
+- Caddy LXC running with `*.lab.local` DNS
 
-On Proxmox host:
+### Step 1 — Install n8n LXC (if not already done)
+
+On Proxmox host shell:
+
 ```bash
-# Option A: Proxmox helper script (recommended)
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct/docker.sh)"
-# Set hostname: n8n-unified, RAM: 4096MB, Cores: 4, Disk: 32GB
+bash -c "$(curl -fsSL https://github.com/community-scripts/ProxmoxVE/raw/main/ct/n8n.sh)"
 ```
 
-Or manual:
-```bash
-pct create 200 local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst \
-  --hostname n8n-unified --memory 4096 --cores 4 \
-  --rootfs local-lvm:32 --net0 name=eth0,bridge=vmbr0,ip=dhcp \
-  --features nesting=1 --unprivileged 1
-pct start 200
-```
+Recommended: 4GB RAM, 4 cores, 20GB disk, unprivileged, same VLAN as dockge-cti.
 
-### Step 2 — Deploy n8n Stack via Dockge
+After install, n8n is immediately available at `http://<N8N_LXC_IP>:5678`
+using SQLite. You can use it in this state indefinitely.
 
-Inside the n8n LXC:
-```bash
-# Install Docker
-curl -fsSL https://get.docker.com | sh
+### Step 2 — First Boot (SQLite mode)
 
-# Clone repo into Dockge stacks directory
-git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git /opt/stacks/n8n-unified
-cd /opt/stacks/n8n-unified
-
-# Copy and fill env
-cp .env.example .env
-nano .env   # fill CTI_LXC_IP, N8N_DB_PASSWORD, LLM keys
-
-# Generate secrets
-echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)"
-echo "N8N_POSTGREST_JWT_SECRET=$(openssl rand -hex 32)"
-
-# Start
-docker compose up -d
-```
-
-### Step 3 — Deploy SearXNG (separate Dockge stack)
-
-See `docs/SEARXNG_SETUP.md`.
-
-### Step 4 — n8n First-Boot Setup
-
-1. Browse to `http://<N8N_LXC_IP>:5678` (or `http://n8n.lab.local` after DNS)
+1. Browse to `http://<N8N_LXC_IP>:5678`
 2. Create owner account
-3. **Settings → API** → Create API Key → copy it
-4. Set Variables (Settings → Variables) — see `docs/N8N_CONFIGURATION.md`
-5. Create Credentials — see `docs/N8N_CONFIGURATION.md`
-6. Run DB migrations — see `docs/N8N_CONFIGURATION.md`
-7. Import workflows from `workflows/unified/`
+3. **Settings → API** → Create API Key → store in Infisical
+4. **Settings → Export** → Download backup JSON (save before migration)
 
-### Step 5 — Add Caddy Routes
+### Step 3 — Update infra-postgres to pgvector (on dockge-cti LXC)
 
-In CaddyManager UI, add routes from `docs/CADDY_ROUTES.md`.
+This is a **one-time change** to enable n8n vector/memory features.
+Existing data is preserved.
 
-### Step 6 — Add DNS Records
+```bash
+# On dockge-cti LXC — in threatlabs-cti-stack/infra/
+# The docker-compose.yml already has the pgvector image.
+# If infra-postgres is running, recreate it:
+docker compose up -d postgres
+```
+
+Verify:
+```bash
+docker exec infra-postgres psql -U postgres -c 'SELECT version();'
+# Should show PostgreSQL 17 from pgvector/pgvector:pg17
+```
+
+### Step 4 — Migrate n8n to Postgres (on n8n LXC)
+
+```bash
+# On n8n LXC as root
+git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git /tmp/n8n-unified
+bash /tmp/n8n-unified/migrate-to-postgres.sh
+```
+
+The script prompts for:
+- dockge-cti LXC IP
+- `N8N_DB_PASSWORD` (from `infra/.env` on dockge-cti)
+- All CTI platform URLs
+- Messaging tokens, LLM API keys
+
+It tests connectivity, backs up SQLite, writes `/opt/n8n.env`, and restarts n8n.
+
+### Step 5 — Run DB Migrations (on dockge-cti LXC)
+
+```bash
+git clone https://github.com/JazenaYLA/n8n-ecosystem-unified.git /tmp/n8n-unified
+for sql in 000_extensions.sql 001_schema.sql 002_seed.sql; do
+  docker exec -i infra-postgres psql -U n8n -d n8n \
+    < /tmp/n8n-unified/migrations/$sql
+done
+```
+
+### Step 6 — Configure n8n UI
+
+See `docs/N8N_CONFIGURATION.md` for:
+- Variables to set (CTI URLs, Telegram ID, etc.)
+- Credentials to create (MISP, OpenCTI, TheHive, Cortex, LLM providers)
+- Workflow import order
+
+### Step 7 — Add Caddy Routes + DNS
+
+See `docs/CADDY_ROUTES.md` for route config.
 
 In UniFi (or router) local DNS:
 ```
-n8n.lab.local       CNAME  caddy.lab.local
-flowise.lab.local   CNAME  caddy.lab.local
-searxng.lab.local   CNAME  caddy.lab.local
-postgrest.lab.local CNAME  caddy.lab.local
-pgadmin.lab.local   CNAME  caddy.lab.local
+n8n.lab.local      CNAME  caddy.lab.local
+flowise.lab.local  CNAME  caddy.lab.local
+searxng.lab.local  CNAME  caddy.lab.local
 ```
+
+---
+
+## Automated Reconfiguration (Antigravity)
+
+For automated agent-driven reconfiguration, see
+**`docs/ANTIGRAVITY_RECONFIGURE.md`** — a complete step-by-step playbook
+that any AI coding agent (Antigravity, Copilot, etc.) can follow to:
+
+- Read live credentials from dockge-cti LXC `infra/.env`
+- Write the complete target `/opt/n8n.env` on the n8n LXC
+- Apply DB migrations
+- Verify and report
+
+---
+
+## Multi-LLM Support
+
+The stack is **LLM-agnostic**. All model calls route through n8n credentials.
+
+| Provider | Type | Mode |
+|---|---|---|
+| **Ollama** | OpenAI-compatible | Local (Proxmox host or LXC) |
+| **Google Gemini** | Gemini API | Cloud |
+| **Anthropic Claude** | Anthropic API | Cloud |
+| **OpenRouter** | HTTP Header Auth | Cloud (multi-model gateway) |
+| **OpenAI** | OpenAI API | Cloud |
+| **Mistral** | HTTP Header Auth | Cloud |
+
+The **Tiered Model Router** workflow selects provider by task complexity
+(score 1–10): local/Ollama ≤3, mid-tier 4–6, heavyweight ≥7.
+
+---
+
+## Flowise Integration
+
+Flowise runs on a dedicated LXC (native Node.js, no Docker) and integrates
+with n8n at three points:
+
+1. **n8n → Flowise** — complex queries forwarded to Flowise chatflows
+2. **CTI document RAG** — Flowise ingests threat reports into pgvector
+3. **Flowise → n8n webhooks** — Flowise triggers n8n workflows
+
+See `docs/FLOWISE_SETUP.md`.
 
 ---
 
@@ -172,24 +216,8 @@ pgadmin.lab.local   CNAME  caddy.lab.local
 
 | Repo | Purpose |
 |---|---|
-| [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack) | CTI platform stack (enterprise branch for Proxmox) |
+| [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack) | CTI platform stack — hosts infra-postgres and all CTI tools |
 | [n8n-claw-templates](https://github.com/JazenaYLA/n8n-claw-templates) | n8n MCP skill template library (CTI + general) |
-
----
-
-## Flowise Integration
-
-Flowise runs in its own dedicated LXC (installed via Proxmox helper script)
-and integrates with n8n at three points:
-
-1. **n8n as gateway, Flowise as RAG brain** — complex queries (score ≥7)
-   are forwarded to a Flowise chatflow via `POST /api/v1/prediction/<id>`
-2. **CTI document RAG** — Flowise ingests MISP/OpenCTI reports into
-   pgvector and answers n8n queries about threat actors, IOCs, TTPs
-3. **Flowise → n8n webhooks** — Flowise custom tool nodes trigger n8n
-   workflows (e.g., create TheHive case from chat finding)
-
-See `docs/FLOWISE_SETUP.md` for full setup and integration patterns.
 
 ---
 
