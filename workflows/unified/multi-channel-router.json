@@ -1,21 +1,344 @@
 {
-  "_unified_stub": true,
   "name": "[UNIFIED] Multi-Channel Router",
-  "description": "Normalizes messages from Telegram, WhatsApp (Evolution API), Slack, and Discord into a common struct {user_message, system_prompt_details, last_channel} before passing to the main n8n-claw orchestrator agent.",
-  "status": "TODO - Phase 2",
-  "design_notes": [
-    "Based on Shabbir n8nclaw Edit Fields pattern (Edit Fields / Edit Fields1 / Edit Fields2 / Edit Fields3)",
-    "Each channel trigger feeds its own Edit Fields node normalizing to: user_message, system_prompt_details, last_channel",
-    "A Switch node at the response end routes reply back by last_channel value",
-    "Memory keyed on username (not chat ID) for cross-channel continuity",
-    "WhatsApp via Evolution API webhook (Filter1 pattern from Shabbir)",
-    "Telegram trigger + filter pattern from Shabbir (Filter by chat.id)"
-  ],
-  "channels": ["telegram", "whatsapp", "slack", "discord"],
-  "output_struct": {
-    "user_message": "string",
-    "system_prompt_details": "string - username/soul/user fields from init table",
-    "last_channel": "telegram|whatsapp|slack|discord"
+  "_unified_version": "1.0.0",
+  "_doc": "Normalizes Telegram and WhatsApp messages into the same struct Freddy's n8n-claw-agent expects: {userMessage, chatId, userId, source}. Add Slack/Discord channels by duplicating the Telegram trigger pattern.",
+  "settings": {
+    "executionOrder": "v1"
   },
-  "nodes": []
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "webhookId": "unified-telegram-trigger",
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "unified-whatsapp-webhook",
+        "options": {}
+      },
+      "id": "whatsapp-webhook",
+      "name": "WhatsApp Webhook (Evolution API)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 200],
+      "webhookId": "unified-whatsapp-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "telegram-chat-id-filter",
+              "leftValue": "={{ $json.message.chat.id }}",
+              "rightValue": "={{$vars.TELEGRAM_CHAT_ID}}",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "telegram-filter",
+      "name": "Filter: Telegram Chat ID",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "wa-phone-filter",
+              "leftValue": "={{ $json.body.data.key.remoteJid }}",
+              "rightValue": "={{$vars.WHATSAPP_PHONE}}@s.whatsapp.net",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "wa-not-from-me",
+              "leftValue": "={{ $json.body.data.key.fromMe }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "false", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "whatsapp-filter",
+      "name": "Filter: WhatsApp Phone",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [240, 200]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "text",
+              "conditions": {
+                "options": { "version": 2, "caseSensitive": true, "typeValidation": "loose" },
+                "combinator": "and",
+                "conditions": [{ "operator": { "type": "string", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.text }}", "rightValue": "" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "voice",
+              "conditions": {
+                "options": { "version": 2, "caseSensitive": true, "typeValidation": "loose" },
+                "combinator": "and",
+                "conditions": [{ "operator": { "type": "object", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.voice }}", "rightValue": "" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "photo",
+              "conditions": {
+                "options": { "version": 2, "caseSensitive": true, "typeValidation": "loose" },
+                "combinator": "and",
+                "conditions": [{ "operator": { "type": "array", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.photo }}", "rightValue": "" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "document",
+              "conditions": {
+                "options": { "version": 2, "caseSensitive": true, "typeValidation": "loose" },
+                "combinator": "and",
+                "conditions": [{ "operator": { "type": "object", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.document }}", "rightValue": "" }]
+              },
+              "renameOutput": true
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "telegram-media-router",
+      "name": "Telegram: Route Media Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Telegram Trigger').first().json.message.voice.file_id }}"
+      },
+      "id": "tg-get-voice",
+      "name": "TG: Get Voice File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, -240],
+      "credentials": { "telegramApi": { "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "modelId": { "__rl": true, "value": "models/gemini-2.5-flash", "mode": "list" },
+        "inputType": "binary",
+        "options": {}
+      },
+      "id": "tg-transcribe-voice",
+      "name": "TG: Transcribe Voice (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [960, -240],
+      "credentials": { "googlePalmApi": { "id": "REPLACE_WITH_YOUR_GOOGLE_CREDENTIAL_ID", "name": "Google AI" } }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Telegram Trigger').first().json.message.photo.pop().file_id }}"
+      },
+      "id": "tg-get-photo",
+      "name": "TG: Get Photo File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, -80],
+      "credentials": { "telegramApi": { "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": { "__rl": true, "value": "models/gemini-2.5-flash", "mode": "list" },
+        "inputType": "binary",
+        "options": {}
+      },
+      "id": "tg-analyze-photo",
+      "name": "TG: Analyze Photo (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [960, -80],
+      "credentials": { "googlePalmApi": { "id": "REPLACE_WITH_YOUR_GOOGLE_CREDENTIAL_ID", "name": "Google AI" } }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Telegram Trigger').first().json.message.document.file_id }}"
+      },
+      "id": "tg-get-doc",
+      "name": "TG: Get Document File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [720, 80],
+      "credentials": { "telegramApi": { "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": { "__rl": true, "value": "models/gemini-2.5-flash", "mode": "list" },
+        "inputType": "binary",
+        "options": {}
+      },
+      "id": "tg-analyze-doc",
+      "name": "TG: Analyze Document (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [960, 80],
+      "credentials": { "googlePalmApi": { "id": "REPLACE_WITH_YOUR_GOOGLE_CREDENTIAL_ID", "name": "Google AI" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const msg = $('Telegram Trigger').first().json.message;\nconst chatId = String(msg.chat.id);\nconst userId = String(msg.from.id);\nconst source = 'telegram';\n\nfunction out(userMessage) {\n  return [{ json: { userMessage, chatId, userId, source } }];\n}\n\ntry { const t = $('TG: Transcribe Voice (Gemini)').first()?.json?.content?.parts?.[0]?.text; if (t) return out('[Voice] ' + t); } catch(e) {}\ntry { const p = $('TG: Analyze Photo (Gemini)').first()?.json?.content?.parts?.[0]?.text; if (p) return out('[Photo] ' + p + (msg.caption ? '\\nCaption: ' + msg.caption : '')); } catch(e) {}\ntry { const d = $('TG: Analyze Document (Gemini)').first()?.json?.content?.parts?.[0]?.text; if (d) return out('[Document: ' + (msg.document?.file_name || 'file') + ']\\n' + d); } catch(e) {}\nreturn out(msg.text || '');"
+      },
+      "id": "tg-normalize",
+      "name": "TG: Normalize Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('WhatsApp Webhook (Evolution API)').first().json.body;\nconst msg = body.data;\nconst chatId = msg.key.remoteJid;\nconst userId = msg.key.remoteJid.replace('@s.whatsapp.net', '');\nconst source = 'whatsapp';\nconst text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '[Media message]';\nreturn [{ json: { userMessage: text, chatId, userId, source } }];"
+      },
+      "id": "wa-normalize",
+      "name": "WA: Normalize Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: data }];"
+      },
+      "id": "merge-channels",
+      "name": "Merge Channels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 100]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "telegram",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.source }}", "rightValue": "telegram", "operator": { "type": "string", "operation": "equals" }, "id": "source-tg" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "whatsapp",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.source }}", "rightValue": "whatsapp", "operator": { "type": "string", "operation": "equals" }, "id": "source-wa" }]
+              },
+              "renameOutput": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "response-router",
+      "name": "Response Router (by source)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1680, 100]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Merge Channels').first().json.chatId }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": { "parse_mode": "Markdown", "appendAttribution": false }
+      },
+      "id": "reply-telegram",
+      "name": "Reply: Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1920, 0],
+      "credentials": { "telegramApi": { "id": "REPLACE_WITH_YOUR_TELEGRAM_CREDENTIAL_ID", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "={{$vars.EVOLUTION_INSTANCE_NAME}}",
+        "remoteJid": "={{ $('Merge Channels').first().json.chatId }}",
+        "messageText": "={{ $json.output }}",
+        "options_message": {}
+      },
+      "id": "reply-whatsapp",
+      "name": "Reply: WhatsApp (Evolution API)",
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [1920, 200],
+      "credentials": { "evolutionApi": { "id": "REPLACE_WITH_YOUR_EVOLUTION_CREDENTIAL_ID", "name": "Evolution API" } }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Filter: Telegram Chat ID", "type": "main", "index": 0 }]] },
+    "WhatsApp Webhook (Evolution API)": { "main": [[{ "node": "Filter: WhatsApp Phone", "type": "main", "index": 0 }]] },
+    "Filter: Telegram Chat ID": { "main": [[{ "node": "Telegram: Route Media Type", "type": "main", "index": 0 }]] },
+    "Filter: WhatsApp Phone": { "main": [[{ "node": "WA: Normalize Message", "type": "main", "index": 0 }]] },
+    "Telegram: Route Media Type": {
+      "main": [
+        [{ "node": "TG: Normalize Message", "type": "main", "index": 0 }],
+        [{ "node": "TG: Get Voice File", "type": "main", "index": 0 }],
+        [{ "node": "TG: Get Photo File", "type": "main", "index": 0 }],
+        [{ "node": "TG: Get Document File", "type": "main", "index": 0 }]
+      ]
+    },
+    "TG: Get Voice File": { "main": [[{ "node": "TG: Transcribe Voice (Gemini)", "type": "main", "index": 0 }]] },
+    "TG: Transcribe Voice (Gemini)": { "main": [[{ "node": "TG: Normalize Message", "type": "main", "index": 0 }]] },
+    "TG: Get Photo File": { "main": [[{ "node": "TG: Analyze Photo (Gemini)", "type": "main", "index": 0 }]] },
+    "TG: Analyze Photo (Gemini)": { "main": [[{ "node": "TG: Normalize Message", "type": "main", "index": 0 }]] },
+    "TG: Get Document File": { "main": [[{ "node": "TG: Analyze Document (Gemini)", "type": "main", "index": 0 }]] },
+    "TG: Analyze Document (Gemini)": { "main": [[{ "node": "TG: Normalize Message", "type": "main", "index": 0 }]] },
+    "TG: Normalize Message": { "main": [[{ "node": "Merge Channels", "type": "main", "index": 0 }]] },
+    "WA: Normalize Message": { "main": [[{ "node": "Merge Channels", "type": "main", "index": 0 }]] },
+    "Merge Channels": { "main": [[{ "node": "Response Router (by source)", "type": "main", "index": 0 }]] },
+    "Response Router (by source)": {
+      "main": [
+        [{ "node": "Reply: Telegram", "type": "main", "index": 0 }],
+        [{ "node": "Reply: WhatsApp (Evolution API)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "_wiring_note": "Connect 'Merge Channels' OUTPUT to the main n8n-claw-agent.json INSTEAD of this workflow's Response Router. The Response Router should receive the agent output. In practice: import both workflows, wire Merge Channels -> n8n-claw-agent Merge Input, then wire AI Agent output -> Response Router.",
+  "active": false,
+  "tags": ["unified", "multi-channel", "router"]
 }
