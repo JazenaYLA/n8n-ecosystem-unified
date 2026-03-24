@@ -1,0 +1,98 @@
+{
+  "name": "YAOC2 Gateway Heartbeat",
+  "_fix": "Rotated hardcoded Telegram bot token and Evolution API key to $env vars. Fixed Evolution webhook body (was empty). Parameterized Telegram webhook URL.",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes" }] }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "id": "9e135bb8-7263-4030-b07b-548e4af453ab"
+    },
+    {
+      "parameters": {
+        "url": "http://ngrok:4040/api/tunnels",
+        "options": {}
+      },
+      "name": "Get ngrok Tunnel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [256, 0],
+      "id": "3c6d8e4c-789d-4e7c-b7dd-7ec5f3db823f"
+    },
+    {
+      "parameters": {
+        "jsCode": "const tunnels = $input.first().json.tunnels ?? [];\nconst https = tunnels.find(t => t.proto === 'https') ?? tunnels[0];\nif (!https) throw new Error('No ngrok tunnel found');\nconst url = https.public_url;\nreturn [{ json: { url } }];"
+      },
+      "name": "Extract URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [512, 0],
+      "id": "501b652a-a171-4970-a487-5ea6c42e86e3"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $env.EVOLUTION_URL ?? 'http://evolution-api:8080' }}/webhook/set/{{ $env.EVOLUTION_INSTANCE_NAME ?? 'n8n claw' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{
+            "name": "apikey",
+            "value": "={{ $env.EVOLUTION_API_KEY }}"
+          }, {
+            "name": "Content-Type",
+            "value": "application/json"
+          }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $('Extract URL').first().json.url + '/webhook/d2cf4a44-47b3-43a3-b3a3-dbc7fdf9b61e', webhook_by_events: false, webhook_base64: false, events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'] }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "name": "Update WhatsApp Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [752, -96],
+      "id": "f8af95b1-f998-414a-bd74-4413d8d5deae"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/setWebhook' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $('Extract URL').first().json.url + '/webhook/62b733ec-d504-4701-a675-16645871e72a', allowed_updates: ['message', 'callback_query'] }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "name": "Update Telegram Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [752, 112],
+      "id": "ae5a3be3-bbcf-42ab-8809-fa9d267ff52c"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": { "main": [[{ "node": "Get ngrok Tunnel", "type": "main", "index": 0 }]] },
+    "Get ngrok Tunnel": { "main": [[{ "node": "Extract URL", "type": "main", "index": 0 }]] },
+    "Extract URL": {
+      "main": [
+        [{ "node": "Update WhatsApp Webhook", "type": "main", "index": 0 }],
+        [{ "node": "Update Telegram Webhook", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1", "binaryMode": "separate" },
+  "versionId": "5388e10f-0ee9-4eb7-896d-08374d811944",
+  "meta": { "instanceId": "c8a2709b949a2d6e46ab3c68e4e965bc396c0a55d9206e4fa8ee9927c92b07c8" },
+  "id": "vGhbAS9WDfPD40q7",
+  "tags": []
+}
