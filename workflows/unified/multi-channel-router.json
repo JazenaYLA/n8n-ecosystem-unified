@@ -1,6 +1,6 @@
 {
   "name": "[UNIFIED] Multi-Channel Router",
-  "_sync_note": "Synced from live brain LXC 2026-03-24. Credential IDs are instance-specific placeholders. TODO: Response Router currently routes directly to reply nodes without calling the Tiered Model Router brain — wire Merge Channels output through tiered-model-router before Response Router.",
+  "_sync_note": "Synced + brain wired 2026-03-24. Merge Channels now calls Tiered Model Router before Response Router. Reply nodes read $json.output which Collect Result now exports.",
   "nodes": [
     {
       "parameters": {
@@ -86,7 +86,7 @@
             {
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
-                "conditions": [{ "operator": { "type": "string", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.text }}", "rightValue": "", "id": "fc5cdd67-cfb9-4adb-bbee-2544dacdadc3" }],
+                "conditions": [{ "operator": { "type": "string", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.text }}", "id": "fc5cdd67-cfb9-4adb-bbee-2544dacdadc3" }],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -95,7 +95,7 @@
             {
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
-                "conditions": [{ "operator": { "type": "object", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.voice }}", "rightValue": "", "id": "72160bb3-58ed-418e-8109-755ea4cfafc7" }],
+                "conditions": [{ "operator": { "type": "object", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.voice }}", "id": "72160bb3-58ed-418e-8109-755ea4cfafc7" }],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -104,7 +104,7 @@
             {
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
-                "conditions": [{ "operator": { "type": "array", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.photo }}", "rightValue": "", "id": "ded0b265-6d22-4f88-b1ba-93a68f50331a" }],
+                "conditions": [{ "operator": { "type": "array", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.photo }}", "id": "ded0b265-6d22-4f88-b1ba-93a68f50331a" }],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -113,7 +113,7 @@
             {
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
-                "conditions": [{ "operator": { "type": "object", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.document }}", "rightValue": "", "id": "ed3f7ee9-fee2-46a1-9170-4c4fc4a9e6eb" }],
+                "conditions": [{ "operator": { "type": "object", "operation": "exists", "singleValue": true }, "leftValue": "={{ $json.message.document }}", "id": "ed3f7ee9-fee2-46a1-9170-4c4fc4a9e6eb" }],
                 "combinator": "and"
               },
               "renameOutput": true,
@@ -266,8 +266,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const data = $input.first().json;\nreturn [{ json: data }];",
-        "_todo": "TODO: After Merge Channels, wire output through [UNIFIED] Tiered Model Router before Response Router. Currently the router echoes $json.output which will be undefined until the brain call is added here."
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: data }];"
       },
       "id": "merge-channels",
       "name": "Merge Channels",
@@ -277,13 +276,32 @@
     },
     {
       "parameters": {
+        "workflowId": { "__rl": true, "value": "H07B6Xs3yeStm7vJ", "mode": "id" },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "agent": "general",
+            "task": "={{ $json.userMessage }}",
+            "context": "={{ 'source:' + $json.source + ' chatId:' + $json.chatId + ' userId:' + $json.userId }}"
+          }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "call-brain",
+      "name": "Call Brain (Tiered Router)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [1680, 112],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
         "rules": {
           "values": [
             {
               "conditions": {
                 "options": { "version": 3, "caseSensitive": true, "typeValidation": "strict" },
                 "combinator": "and",
-                "conditions": [{ "id": "source-tg", "operator": { "type": "string", "operation": "equals" }, "leftValue": "={{ $json.source }}", "rightValue": "telegram" }]
+                "conditions": [{ "id": "source-tg", "operator": { "type": "string", "operation": "equals" }, "leftValue": "={{ $('Merge Channels').first().json.source }}", "rightValue": "telegram" }]
               },
               "renameOutput": true,
               "outputKey": "telegram"
@@ -292,7 +310,7 @@
               "conditions": {
                 "options": { "version": 3, "caseSensitive": true, "typeValidation": "strict" },
                 "combinator": "and",
-                "conditions": [{ "id": "source-wa", "operator": { "type": "string", "operation": "equals" }, "leftValue": "={{ $json.source }}", "rightValue": "whatsapp" }]
+                "conditions": [{ "id": "source-wa", "operator": { "type": "string", "operation": "equals" }, "leftValue": "={{ $('Merge Channels').first().json.source }}", "rightValue": "whatsapp" }]
               },
               "renameOutput": true,
               "outputKey": "whatsapp"
@@ -304,13 +322,13 @@
       "id": "response-router",
       "name": "Response Router (by source)",
       "type": "n8n-nodes-base.switch",
-      "position": [1680, 112],
+      "position": [1920, 112],
       "typeVersion": 3.4
     },
     {
       "parameters": {
         "chatId": "={{ $('Merge Channels').first().json.chatId }}",
-        "text": "={{ $json.output }}",
+        "text": "={{ $('Call Brain (Tiered Router)').first().json.output }}",
         "additionalFields": {
           "appendAttribution": false,
           "parse_mode": "Markdown"
@@ -319,7 +337,7 @@
       "id": "reply-telegram",
       "name": "Reply: Telegram",
       "type": "n8n-nodes-base.telegram",
-      "position": [1920, 0],
+      "position": [2160, 0],
       "typeVersion": 1.2,
       "webhookId": "258771e2-7158-4249-b61d-60160dec4213",
       "credentials": {
@@ -334,13 +352,13 @@
         "resource": "messages-api",
         "instanceName": "={{$vars.EVOLUTION_INSTANCE_NAME}}",
         "remoteJid": "={{ $('Merge Channels').first().json.chatId }}",
-        "messageText": "={{ $json.output }}",
+        "messageText": "={{ $('Call Brain (Tiered Router)').first().json.output }}",
         "options_message": {}
       },
       "id": "reply-whatsapp",
       "name": "Reply: WhatsApp (Evolution API)",
       "type": "n8n-nodes-evolution-api.evolutionApi",
-      "position": [1920, 208],
+      "position": [2160, 208],
       "typeVersion": 1,
       "credentials": {
         "evolutionApi": {
@@ -372,7 +390,8 @@
     "TG: Analyze Document (Gemini)": { "main": [[{ "node": "TG: Normalize Message", "type": "main", "index": 0 }]] },
     "TG: Normalize Message": { "main": [[{ "node": "Merge Channels", "type": "main", "index": 0 }]] },
     "WA: Normalize Message": { "main": [[{ "node": "Merge Channels", "type": "main", "index": 0 }]] },
-    "Merge Channels": { "main": [[{ "node": "Response Router (by source)", "type": "main", "index": 0 }]] },
+    "Merge Channels": { "main": [[{ "node": "Call Brain (Tiered Router)", "type": "main", "index": 0 }]] },
+    "Call Brain (Tiered Router)": { "main": [[{ "node": "Response Router (by source)", "type": "main", "index": 0 }]] },
     "Response Router (by source)": {
       "main": [
         [{ "node": "Reply: Telegram", "type": "main", "index": 0 }],
