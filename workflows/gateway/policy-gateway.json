@@ -1,33 +1,34 @@
 {
   "name": "[YAOC2] Policy Gateway",
-  "_version": "1.3.1",
-  "_fixes": [
-    "1: queryReplacement moved from additionalFields to options (Postgres v2.5 correct location)",
-    "2: Execute Sandbox Workflow rewritten for executeWorkflow v1.1 passthrough",
-    "3: Webhook authentication removed — X-Gateway-Secret validated in Validate Schema code node",
-    "4: Normalise Response reads from Map to Sandbox Workflow not distant Evaluate Policy ancestor",
-    "5: Evaluate Policy has explicit null guard on _policy_set",
-    "6: Telegram text uses template literal for real newlines; backtick is unescaped (valid JSON)",
-    "7: Write Audit Log (Deny) includes result_raw column"
-  ],
+  "_yaoc2_version": "2026.03.2",
+  "_doc": "NemoClaw-style policy gateway. Receives ProposedAction from brain, validates schema, loads policy from infra-postgres, evaluates rules, routes to allow/deny/needs-approval, dispatches approved actions to sandbox workflows, writes audit log, responds to brain. v2026.03.2: Capability Guard added before Telegram send node — checks env vars and credentials are present before attempting delivery.",
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "any",
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
         "path": "proposed-action",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
       "id": "webhook-entry",
-      "name": "Webhook \u2014 Receive ProposedAction",
+      "name": "Webhook — Receive ProposedAction",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [0, 0],
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE_GATEWAY_WEBHOOK_CREDENTIAL", "name": "Gateway Webhook Secret" } },
       "webhookId": "yaoc2-proposed-action"
     },
     {
       "parameters": {
-        "jsCode": "const secret = $input.item.json.headers?.['x-gateway-secret'] ?? $input.item.json.headers?.['X-Gateway-Secret'] ?? '';\nconst expectedSecret = $env.GATEWAY_WEBHOOK_SECRET ?? '';\nif (!expectedSecret) throw new Error('GATEWAY_WEBHOOK_SECRET env var not set on gateway');\nif (secret !== expectedSecret) {\n  return [{ json: { _gateway: { valid: false, errors: ['Unauthorized: invalid or missing X-Gateway-Secret header'] } } }];\n}\nconst REQUIRED_TOP = ['id','timestamp','agent','requester','intent','action','risk','policy'];\nconst REQUIRED_REQUESTER = ['user_id','channel','tenant'];\nconst REQUIRED_ACTION = ['type','name','target_system','mode'];\nconst REQUIRED_RISK = ['level'];\nconst REQUIRED_POLICY = ['policy_set'];\nconst VALID_ACTION_TYPES = ['workflow','http_call','shell','external_soar'];\nconst VALID_MODES = ['read-only','read-write','admin'];\nconst VALID_RISK_LEVELS = ['low','medium','high','critical'];\nconst VALID_CHANNELS = ['telegram','whatsapp','discord','web','api'];\nconst ALLOWED_TOP = new Set(['id','timestamp','agent','requester','intent','action','risk','constraints','policy','llm_explanation']);\nconst errors = [];\nconst body = $input.item.json.body ?? $input.item.json;\nconst stripped = {};\nfor (const key of Object.keys(body)) { if (ALLOWED_TOP.has(key)) stripped[key] = body[key]; }\nfor (const field of REQUIRED_TOP) { if (!stripped[field]) errors.push(`Missing required field: ${field}`); }\nif (stripped.id && !/^[0-9a-f-]{36}$/i.test(stripped.id)) errors.push('Field id must be a UUID v4 string');\nif (stripped.requester) {\n  for (const f of REQUIRED_REQUESTER) { if (!stripped.requester[f]) errors.push(`Missing requester.${f}`); }\n  if (stripped.requester.channel && !VALID_CHANNELS.includes(stripped.requester.channel)) errors.push(`requester.channel must be one of: ${VALID_CHANNELS.join(', ')}`);\n}\nif (stripped.action) {\n  for (const f of REQUIRED_ACTION) { if (!stripped.action[f]) errors.push(`Missing action.${f}`); }\n  if (stripped.action.type && !VALID_ACTION_TYPES.includes(stripped.action.type)) errors.push(`action.type must be one of: ${VALID_ACTION_TYPES.join(', ')}`);\n  if (stripped.action.mode && !VALID_MODES.includes(stripped.action.mode)) errors.push(`action.mode must be one of: ${VALID_MODES.join(', ')}`);\n  if (stripped.action.parameters) {\n    for (const [k,v] of Object.entries(stripped.action.parameters)) {\n      if (typeof v === 'string' && v.length > 500) errors.push(`action.parameters.${k} exceeds 500 chars`);\n    }\n  }\n}\nif (stripped.risk) {\n  for (const f of REQUIRED_RISK) { if (!stripped.risk[f]) errors.push(`Missing risk.${f}`); }\n  if (stripped.risk.level && !VALID_RISK_LEVELS.includes(stripped.risk.level)) errors.push(`risk.level must be one of: ${VALID_RISK_LEVELS.join(', ')}`);\n}\nif (stripped.policy) {\n  for (const f of REQUIRED_POLICY) { if (!stripped.policy[f]) errors.push(`Missing policy.${f}`); }\n}\nreturn [{ json: { ...stripped, _gateway: { valid: errors.length === 0, errors } } }];"
+        "jsCode": "const REQUIRED_TOP = ['id','timestamp','agent','requester','intent','action','risk','policy'];\nconst REQUIRED_REQUESTER = ['user_id','channel','tenant'];\nconst REQUIRED_ACTION = ['type','name','target_system','mode'];\nconst REQUIRED_RISK = ['level'];\nconst REQUIRED_POLICY = ['policy_set'];\nconst VALID_ACTION_TYPES = ['workflow','http_call','shell','external_soar'];\nconst VALID_MODES = ['read-only','read-write','admin'];\nconst VALID_RISK_LEVELS = ['low','medium','high','critical'];\nconst VALID_CHANNELS = ['telegram','discord','web','api','whatsapp'];\nconst ALLOWED_TOP = new Set(['id','timestamp','agent','requester','intent','action','risk','constraints','policy','llm_explanation']);\nconst errors = [];\nconst body = $input.item.json.body ?? $input.item.json;\nconst stripped = {};\nfor (const key of Object.keys(body)) { if (ALLOWED_TOP.has(key)) stripped[key] = body[key]; }\nfor (const field of REQUIRED_TOP) { if (!stripped[field]) errors.push(`Missing required field: ${field}`); }\nif (stripped.id && !/^[0-9a-f-]{36}$/i.test(stripped.id)) errors.push('Field id must be a UUID v4 string');\nif (stripped.requester) { for (const f of REQUIRED_REQUESTER) { if (!stripped.requester[f]) errors.push(`Missing requester.${f}`); } if (stripped.requester.channel && !VALID_CHANNELS.includes(stripped.requester.channel)) errors.push(`requester.channel must be one of: ${VALID_CHANNELS.join(', ')}`); }\nif (stripped.action) { for (const f of REQUIRED_ACTION) { if (!stripped.action[f]) errors.push(`Missing action.${f}`); } if (stripped.action.type && !VALID_ACTION_TYPES.includes(stripped.action.type)) errors.push(`action.type must be one of: ${VALID_ACTION_TYPES.join(', ')}`); if (stripped.action.mode && !VALID_MODES.includes(stripped.action.mode)) errors.push(`action.mode must be one of: ${VALID_MODES.join(', ')}`); if (stripped.action.parameters) { for (const [k,v] of Object.entries(stripped.action.parameters)) { if (typeof v === 'string' && v.length > 500) errors.push(`action.parameters.${k} exceeds 500 chars — raw prompt injection suspected`); } } }\nif (stripped.risk) { for (const f of REQUIRED_RISK) { if (!stripped.risk[f]) errors.push(`Missing risk.${f}`); } if (stripped.risk.level && !VALID_RISK_LEVELS.includes(stripped.risk.level)) errors.push(`risk.level must be one of: ${VALID_RISK_LEVELS.join(', ')}`); }\nif (stripped.policy) { for (const f of REQUIRED_POLICY) { if (!stripped.policy[f]) errors.push(`Missing policy.${f}`); } }\nreturn [{ json: { ...stripped, _gateway: { valid: errors.length === 0, errors } } }];"
       },
       "id": "validate-schema",
       "name": "Validate Schema",
@@ -40,20 +41,22 @@
         "rules": {
           "values": [
             {
+              "outputKey": "valid",
               "conditions": {
                 "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
                 "combinator": "and",
                 "conditions": [{ "leftValue": "={{ $json._gateway.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" }, "id": "is-valid" }]
               },
-              "renameOutput": true, "outputKey": "valid"
+              "renameOutput": true
             },
             {
+              "outputKey": "invalid",
               "conditions": {
                 "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
                 "combinator": "and",
                 "conditions": [{ "leftValue": "={{ $json._gateway.valid }}", "rightValue": false, "operator": { "type": "boolean", "operation": "false" }, "id": "is-invalid" }]
               },
-              "renameOutput": true, "outputKey": "invalid"
+              "renameOutput": true
             }
           ]
         },
@@ -81,21 +84,18 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT id, name, version, defaults, rules FROM yaoc2.policy_sets WHERE name = $1 LIMIT 1",
-        "additionalFields": {},
-        "options": {
-          "queryReplacement": "={{ $json.policy.policy_set }}"
-        }
+        "additionalFields": { "queryParams": "={{ [$json.policy.policy_set] }}" }
       },
       "id": "load-policy",
       "name": "Load Policy Set",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [720, -160],
-      "credentials": { "postgres": { "id": "infra-postgres", "name": "infra-postgres" } }
+      "credentials": { "postgres": { "id": "REPLACE_INFRA_POSTGRES_CREDENTIAL", "name": "infra-postgres" } }
     },
     {
       "parameters": {
-        "jsCode": "const item = $('Validate Schema').first().json;\nconst policyRow = $input.item.json;\nif (!policyRow || !policyRow.name) throw new Error(`Policy set '${item.policy?.policy_set}' not found in yaoc2.policy_sets`);\nconst policySet = {\n  name:     policyRow.name,\n  version:  policyRow.version,\n  defaults: typeof policyRow.defaults === 'string' ? JSON.parse(policyRow.defaults) : (policyRow.defaults ?? {}),\n  rules:    typeof policyRow.rules    === 'string' ? JSON.parse(policyRow.rules)    : (policyRow.rules ?? []),\n};\nreturn [{ json: { ...item, _policy_set: policySet } }];"
+        "jsCode": "const item = $('Validate Schema').first().json;\nconst policyRow = $input.item.json;\nconst policySet = {\n  name:     policyRow.name,\n  version:  policyRow.version,\n  defaults: typeof policyRow.defaults === 'string' ? JSON.parse(policyRow.defaults) : policyRow.defaults,\n  rules:    typeof policyRow.rules    === 'string' ? JSON.parse(policyRow.rules)    : policyRow.rules,\n};\nreturn [{ json: { ...item, _policy_set: policySet } }];"
       },
       "id": "merge-policy",
       "name": "Merge Policy into Item",
@@ -105,7 +105,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.item.json;\nif (!item._policy_set) throw new Error('_policy_set missing from item. Check DB row for policy set: ' + item.policy?.policy_set);\nconst RISK_ORDER = { low:0, medium:1, high:2, critical:3 };\nconst action = item.action;\nconst requester = item.requester;\nconst risk = item.risk;\nconst policySet = item._policy_set;\nconst rules = policySet.rules ?? [];\nconst defaults = policySet.defaults ?? {};\nfunction matches(ruleVal, actualVal) { if (!ruleVal || ruleVal === '*') return true; return ruleVal === actualVal; }\nfunction meetsRiskThreshold(ruleMinLevel, actualLevel) { if (!ruleMinLevel) return true; return RISK_ORDER[actualLevel] >= RISK_ORDER[ruleMinLevel]; }\nfunction matchesRule(rule, action, requester, risk) {\n  const m = rule.match || {};\n  return matches(m.target_system, action.target_system) && matches(m.action_name, action.name) && matches(m.mode, action.mode) && matches(m.channel, requester.channel) && matches(m.tenant, requester.tenant) && meetsRiskThreshold(m.min_risk_level, risk.level);\n}\nlet decision = null, approvers = null, matchedRule = null;\nfor (const rule of rules) {\n  if (matchesRule(rule, action, requester, risk)) { decision = rule.decision; approvers = rule.approvers ?? null; matchedRule = rule.id; break; }\n}\nif (!decision) {\n  const level = risk.level;\n  if (level === 'low' && defaults.auto_allow_low_risk) { decision = 'allow'; matchedRule = '__default_low_allow'; }\n  else if (level === 'critical' && defaults.auto_deny_critical_without_approval) { decision = 'deny'; matchedRule = '__default_critical_deny'; }\n  else { decision = 'needs-approval'; approvers = { role: defaults.default_approval_role ?? 'threat-analyst', count: 1 }; matchedRule = '__default_needs_approval'; }\n}\nreturn [{ json: { ...item, _gateway: { ...item._gateway, decision, approvers, matched_rule: matchedRule } } }];"
+        "jsCode": "const RISK_ORDER = { low:0, medium:1, high:2, critical:3 };\nconst item = $input.item.json;\nconst action = item.action;\nconst requester = item.requester;\nconst risk = item.risk;\nconst policySet = item._policy_set;\nconst rules = policySet?.rules ?? [];\nconst defaults = policySet?.defaults ?? {};\nfunction matches(ruleVal, actualVal) { if (!ruleVal || ruleVal === '*') return true; return ruleVal === actualVal; }\nfunction meetsRiskThreshold(ruleMinLevel, actualLevel) { if (!ruleMinLevel) return true; return RISK_ORDER[actualLevel] >= RISK_ORDER[ruleMinLevel]; }\nfunction matchesRule(rule, action, requester, risk) { const m = rule.match || {}; return matches(m.target_system, action.target_system) && matches(m.action_name, action.name) && matches(m.mode, action.mode) && matches(m.channel, requester.channel) && matches(m.tenant, requester.tenant) && meetsRiskThreshold(m.min_risk_level, risk.level); }\nlet decision = null, approvers = null, matchedRule = null;\nfor (const rule of rules) { if (matchesRule(rule, action, requester, risk)) { decision = rule.decision; approvers = rule.approvers ?? null; matchedRule = rule.id; break; } }\nif (!decision) { const level = risk.level; if (level === 'low' && defaults.auto_allow_low_risk) { decision = 'allow'; matchedRule = '__default_low_allow'; } else if (level === 'critical' && defaults.auto_deny_critical_without_approval) { decision = 'deny'; matchedRule = '__default_critical_deny'; } else { decision = 'needs-approval'; approvers = { role: defaults.default_approval_role ?? 'threat-analyst', count: 1 }; matchedRule = '__default_needs_approval'; } }\nreturn [{ json: { ...item, _gateway: { ...item._gateway, decision, approvers, matched_rule: matchedRule } } }];"
       },
       "id": "evaluate-policy",
       "name": "Evaluate Policy",
@@ -118,28 +118,31 @@
         "rules": {
           "values": [
             {
+              "outputKey": "allow",
               "conditions": {
                 "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
                 "combinator": "and",
                 "conditions": [{ "leftValue": "={{ $json._gateway.decision }}", "rightValue": "allow", "operator": { "type": "string", "operation": "equals" }, "id": "dec-allow" }]
               },
-              "renameOutput": true, "outputKey": "allow"
+              "renameOutput": true
             },
             {
+              "outputKey": "deny",
               "conditions": {
                 "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
                 "combinator": "and",
                 "conditions": [{ "leftValue": "={{ $json._gateway.decision }}", "rightValue": "deny", "operator": { "type": "string", "operation": "equals" }, "id": "dec-deny" }]
               },
-              "renameOutput": true, "outputKey": "deny"
+              "renameOutput": true
             },
             {
+              "outputKey": "needs-approval",
               "conditions": {
                 "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
                 "combinator": "and",
                 "conditions": [{ "leftValue": "={{ $json._gateway.decision }}", "rightValue": "needs-approval", "operator": { "type": "string", "operation": "equals" }, "id": "dec-approval" }]
               },
-              "renameOutput": true, "outputKey": "needs-approval"
+              "renameOutput": true
             }
           ]
         },
@@ -153,7 +156,120 @@
     },
     {
       "parameters": {
-        "jsCode": "const SANDBOX_MAP = {\n  'ioc_enrichment_misp_opencti': 'HbuaYADHUZWsIFW0',\n  'opencti_sync':                'FFdEjxvVkqRIZQ7W',\n  'case_create_thehive':         'wKPBXbyhvYMJ8qEH'\n};\nconst item = $input.item.json;\nconst actionName = item.action?.name;\nif (!actionName) throw new Error('action.name is missing');\nconst sandboxId = SANDBOX_MAP[actionName];\nif (!sandboxId) throw new Error(`No sandbox mapped for action.name: ${actionName}. Valid: ${Object.keys(SANDBOX_MAP).join(', ')}`);\nreturn [{ json: {\n  proposed_action_id: item.id,\n  parameters:         item.action.parameters ?? {},\n  action:             item.action,\n  requester:          item.requester,\n  _original:          item,\n  _gateway: { ...item._gateway, sandbox_workflow_id: sandboxId }\n} }];"
+        "workflowId": { "__rl": true, "value": "[YAOC2] Capability Guard — Communications", "mode": "name" },
+        "workflowInputs": {
+          "values": [
+            { "name": "capability", "value": "telegram" }
+          ]
+        }
+      },
+      "id": "guard-telegram",
+      "name": "Capability Guard — Telegram",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1680, 80]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "ok",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.status }}", "rightValue": "ok", "operator": { "type": "string", "operation": "equals" }, "id": "guard-ok" }]
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "missing",
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+                "combinator": "and",
+                "conditions": [{ "leftValue": "={{ $json.status }}", "rightValue": "missing", "operator": { "type": "string", "operation": "equals" }, "id": "guard-missing" }]
+              },
+              "renameOutput": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "guard-route",
+      "name": "Guard — Telegram Ready?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1920, 80]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "yaoc2",
+        "table": "audit_log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "proposed_action_id": "={{ $('Evaluate Policy').first().json.id }}",
+            "timestamp": "={{ new Date().toISOString() }}",
+            "user_id": "={{ $('Evaluate Policy').first().json.requester?.user_id }}",
+            "channel": "={{ $('Evaluate Policy').first().json.requester?.channel }}",
+            "tenant": "={{ $('Evaluate Policy').first().json.requester?.tenant }}",
+            "action_name": "={{ $('Evaluate Policy').first().json.action?.name }}",
+            "decision": "needs-approval",
+            "final_status": "capability-missing",
+            "result_summary": "={{ 'Telegram capability guard failed: missing fields: ' + ($input.item.json.missingFields ?? []).join(', ') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-guard-failure",
+      "name": "Log Guard Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2160, 240],
+      "credentials": { "postgres": { "id": "REPLACE_INFRA_POSTGRES_CREDENTIAL", "name": "infra-postgres" } }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.APPROVAL_CHAT_ID }}",
+        "text": "={{ '⚠️ *Capability Guard Failure*\\n\\nTelegram credentials are not fully configured.\\n*Missing:* ' + ($('Guard — Telegram Ready?').first().json.missingFields ?? []).join(', ') + '\\n\\n*Instructions:* ' + ($('Guard — Telegram Ready?').first().json.instructions ?? 'Check n8n environment variables.') }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "telegram-guard-alert",
+      "name": "Telegram — Operator Alert (Guard Failure)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2160, 400],
+      "credentials": { "telegramApi": { "id": "REPLACE_TELEGRAM_CREDENTIAL", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.APPROVAL_CHAT_ID }}",
+        "text": "={{ '🔐 *Approval Required*\\n\\n*Action:* ' + $('Evaluate Policy').first().json.action.name + '\\n*Target:* ' + $('Evaluate Policy').first().json.action.target_system + '\\n*Risk:* ' + $('Evaluate Policy').first().json.risk.level + '\\n*Requested by:* ' + $('Evaluate Policy').first().json.requester.display_name + '\\n*Intent:* ' + $('Evaluate Policy').first().json.intent.title + '\\n\\n*ID:* `' + $('Evaluate Policy').first().json.id + '`\\n\\nReply with the ID above and APPROVE or DENY.' }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "telegram-approval-request",
+      "name": "Telegram — Request Approval",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2160, 80],
+      "credentials": { "telegramApi": { "id": "REPLACE_TELEGRAM_CREDENTIAL", "name": "Telegram Bot" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'pending-approval', proposed_action_id: $('Evaluate Policy').first().json.id, message: 'Action requires approval. Analyst has been notified via Telegram.' }) }}",
+        "options": { "responseCode": 202 }
+      },
+      "id": "respond-pending",
+      "name": "Respond 202 Pending",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2400, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const SANDBOX_MAP = {\n  'ioc_enrichment_misp_opencti': 'YAOC2 Sandbox — MISP Enrich + OpenCTI Sync',\n  'opencti_sync': 'YAOC2 Sandbox — OpenCTI Sync',\n  'case_create_thehive': 'YAOC2 Sandbox — TheHive Case Create',\n  'handle_whatsapp_message': 'YAOC2 Sandbox — WhatsApp Message Handler',\n};\nconst item = $input.item.json;\nconst actionName = item.action?.name;\nif (!actionName) throw new Error('action.name is missing');\nconst sandboxWorkflow = SANDBOX_MAP[actionName];\nif (!sandboxWorkflow) throw new Error(`No sandbox mapped for action.name: ${actionName}`);\nreturn [{ json: { ...item, _gateway: { ...item._gateway, sandbox_workflow_name: sandboxWorkflow, sandbox_input: item.action.parameters ?? {} } } }];"
       },
       "id": "map-to-sandbox",
       "name": "Map to Sandbox Workflow",
@@ -163,9 +279,15 @@
     },
     {
       "parameters": {
-        "workflowId": { "__rl": true, "value": "={{ $json._gateway.sandbox_workflow_id }}", "mode": "id" },
-        "source": "passthrough",
-        "options": { "waitForSubWorkflow": true }
+        "workflowId": "={{ $json._gateway.sandbox_workflow_name }}",
+        "workflowInputs": {
+          "values": [
+            { "name": "action", "value": "={{ $json.action }}" },
+            { "name": "parameters", "value": "={{ $json._gateway.sandbox_input }}" },
+            { "name": "proposed_action_id", "value": "={{ $json.id }}" },
+            { "name": "requester", "value": "={{ $json.requester }}" }
+          ]
+        }
       },
       "id": "execute-sandbox",
       "name": "Execute Sandbox Workflow",
@@ -175,7 +297,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const mapItem = $('Map to Sandbox Workflow').first().json;\nconst original = mapItem._original ?? {};\nconst gateway = mapItem._gateway ?? {};\nconst sandboxResult = $input.item.json ?? {};\nlet finalStatus;\nif (sandboxResult.status === 'success' || sandboxResult.status === 'partial') { finalStatus = 'executed'; } else { finalStatus = 'failed'; }\nconst response = {\n  proposed_action_id: original.id,\n  final_status:       finalStatus,\n  result_summary:     sandboxResult.result_summary ?? 'No result summary',\n  raw_result_ref:     sandboxResult.raw_result_ref ?? null\n};\nconst auditRecord = {\n  proposed_action_id:  original.id,\n  timestamp:           new Date().toISOString(),\n  user_id:             original.requester?.user_id,\n  display_name:        original.requester?.display_name,\n  channel:             original.requester?.channel,\n  tenant:              original.requester?.tenant,\n  action_type:         original.action?.type,\n  action_name:         original.action?.name,\n  target_system:       original.action?.target_system,\n  action_mode:         original.action?.mode,\n  risk_level:          original.risk?.level,\n  policy_set:          original.policy?.policy_set,\n  decision:            gateway.decision,\n  approver_id:         gateway.approver_id ?? null,\n  approved_at:         gateway.approved_at ?? null,\n  final_status:        finalStatus,\n  result_summary:      response.result_summary,\n  raw_result_ref:      response.raw_result_ref,\n  proposed_action_raw: JSON.stringify(original),\n  result_raw:          JSON.stringify(sandboxResult)\n};\nreturn [{ json: { response, audit_record: auditRecord } }];"
+        "jsCode": "const item = $('Evaluate Policy').first().json;\nconst gateway = item._gateway ?? {};\nconst sandboxResult = $input.item.json ?? {};\nlet finalStatus;\nif (gateway.decision === 'deny') { finalStatus = 'denied'; }\nelse if (sandboxResult.status === 'success') { finalStatus = 'executed'; }\nelse if (sandboxResult.status === 'partial') { finalStatus = 'executed'; }\nelse if (!sandboxResult.status) { finalStatus = 'pending-approval'; }\nelse { finalStatus = 'failed'; }\nconst response = { proposed_action_id: item.id, final_status: finalStatus, result_summary: sandboxResult.result_summary ?? gateway.deny_reason ?? 'No result', raw_result_ref: sandboxResult.raw_result_ref ?? null };\nconst auditRecord = { proposed_action_id: item.id, timestamp: new Date().toISOString(), user_id: item.requester?.user_id, display_name: item.requester?.display_name, channel: item.requester?.channel, tenant: item.requester?.tenant, action_type: item.action?.type, action_name: item.action?.name, target_system: item.action?.target_system, action_mode: item.action?.mode, risk_level: item.risk?.level, policy_set: item.policy?.policy_set, decision: gateway.decision, approver_id: gateway.approver_id ?? null, approved_at: gateway.approved_at ?? null, final_status: finalStatus, result_summary: response.result_summary, raw_result_ref: response.raw_result_ref, proposed_action_raw: JSON.stringify(item), result_raw: JSON.stringify(sandboxResult) };\nreturn [{ json: { response, audit_record: auditRecord } }];"
       },
       "id": "normalise-response",
       "name": "Normalise Response",
@@ -185,31 +307,32 @@
     },
     {
       "parameters": {
+        "operation": "insert",
         "schema": "yaoc2",
         "table": "audit_log",
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "proposed_action_id":  "={{ $json.audit_record.proposed_action_id }}",
-            "timestamp":           "={{ $json.audit_record.timestamp }}",
-            "user_id":             "={{ $json.audit_record.user_id }}",
-            "display_name":        "={{ $json.audit_record.display_name }}",
-            "channel":             "={{ $json.audit_record.channel }}",
-            "tenant":              "={{ $json.audit_record.tenant }}",
-            "action_type":         "={{ $json.audit_record.action_type }}",
-            "action_name":         "={{ $json.audit_record.action_name }}",
-            "target_system":       "={{ $json.audit_record.target_system }}",
-            "action_mode":         "={{ $json.audit_record.action_mode }}",
-            "risk_level":          "={{ $json.audit_record.risk_level }}",
-            "policy_set":          "={{ $json.audit_record.policy_set }}",
-            "decision":            "={{ $json.audit_record.decision }}",
-            "approver_id":         "={{ $json.audit_record.approver_id }}",
-            "approved_at":         "={{ $json.audit_record.approved_at }}",
-            "final_status":        "={{ $json.audit_record.final_status }}",
-            "result_summary":      "={{ $json.audit_record.result_summary }}",
-            "raw_result_ref":      "={{ $json.audit_record.raw_result_ref }}",
+            "proposed_action_id": "={{ $json.audit_record.proposed_action_id }}",
+            "timestamp": "={{ $json.audit_record.timestamp }}",
+            "user_id": "={{ $json.audit_record.user_id }}",
+            "display_name": "={{ $json.audit_record.display_name }}",
+            "channel": "={{ $json.audit_record.channel }}",
+            "tenant": "={{ $json.audit_record.tenant }}",
+            "action_type": "={{ $json.audit_record.action_type }}",
+            "action_name": "={{ $json.audit_record.action_name }}",
+            "target_system": "={{ $json.audit_record.target_system }}",
+            "action_mode": "={{ $json.audit_record.action_mode }}",
+            "risk_level": "={{ $json.audit_record.risk_level }}",
+            "policy_set": "={{ $json.audit_record.policy_set }}",
+            "decision": "={{ $json.audit_record.decision }}",
+            "approver_id": "={{ $json.audit_record.approver_id }}",
+            "approved_at": "={{ $json.audit_record.approved_at }}",
+            "final_status": "={{ $json.audit_record.final_status }}",
+            "result_summary": "={{ $json.audit_record.result_summary }}",
+            "raw_result_ref": "={{ $json.audit_record.raw_result_ref }}",
             "proposed_action_raw": "={{ $json.audit_record.proposed_action_raw }}",
-            "result_raw":          "={{ $json.audit_record.result_raw }}"
+            "result_raw": "={{ $json.audit_record.result_raw }}"
           }
         },
         "options": {}
@@ -219,7 +342,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [2400, -320],
-      "credentials": { "postgres": { "id": "infra-postgres", "name": "infra-postgres" } }
+      "credentials": { "postgres": { "id": "REPLACE_INFRA_POSTGRES_CREDENTIAL", "name": "infra-postgres" } }
     },
     {
       "parameters": {
@@ -245,28 +368,28 @@
     },
     {
       "parameters": {
+        "operation": "insert",
         "schema": "yaoc2",
         "table": "audit_log",
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "proposed_action_id":  "={{ $json.id }}",
-            "timestamp":           "={{ new Date().toISOString() }}",
-            "user_id":             "={{ $json.requester?.user_id }}",
-            "display_name":        "={{ $json.requester?.display_name }}",
-            "channel":             "={{ $json.requester?.channel }}",
-            "tenant":              "={{ $json.requester?.tenant }}",
-            "action_type":         "={{ $json.action?.type }}",
-            "action_name":         "={{ $json.action?.name }}",
-            "target_system":       "={{ $json.action?.target_system }}",
-            "action_mode":         "={{ $json.action?.mode }}",
-            "risk_level":          "={{ $json.risk?.level }}",
-            "policy_set":          "={{ $json.policy?.policy_set }}",
-            "decision":            "deny",
-            "final_status":        "denied",
-            "result_summary":      "={{ $json._gateway.deny_reason }}",
-            "proposed_action_raw": "={{ JSON.stringify($json) }}",
-            "result_raw":          "={{ JSON.stringify({ decision: 'deny', reason: $json._gateway.deny_reason, matched_rule: $json._gateway.matched_rule }) }}"
+            "proposed_action_id": "={{ $json.id }}",
+            "timestamp": "={{ new Date().toISOString() }}",
+            "user_id": "={{ $json.requester?.user_id }}",
+            "display_name": "={{ $json.requester?.display_name }}",
+            "channel": "={{ $json.requester?.channel }}",
+            "tenant": "={{ $json.requester?.tenant }}",
+            "action_type": "={{ $json.action?.type }}",
+            "action_name": "={{ $json.action?.name }}",
+            "target_system": "={{ $json.action?.target_system }}",
+            "action_mode": "={{ $json.action?.mode }}",
+            "risk_level": "={{ $json.risk?.level }}",
+            "policy_set": "={{ $json.policy?.policy_set }}",
+            "decision": "deny",
+            "final_status": "denied",
+            "result_summary": "={{ $json._gateway.deny_reason }}",
+            "proposed_action_raw": "={{ JSON.stringify($json) }}"
           }
         },
         "options": {}
@@ -276,7 +399,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1920, -160],
-      "credentials": { "postgres": { "id": "infra-postgres", "name": "infra-postgres" } }
+      "credentials": { "postgres": { "id": "REPLACE_INFRA_POSTGRES_CREDENTIAL", "name": "infra-postgres" } }
     },
     {
       "parameters": {
@@ -289,52 +412,10 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [2160, -160]
-    },
-    {
-      "parameters": {
-        "jsCode": "const chatId = $env.APPROVAL_CHAT_ID ?? '';\nif (!chatId) throw new Error('APPROVAL_CHAT_ID env var not set on gateway');\nconst item = $input.item.json;\nreturn [{ json: { ...item, _approval_chat_id: chatId } }];"
-      },
-      "id": "approval-guard",
-      "name": "Approval Guard",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1680, 80]
-    },
-    {
-      "parameters": {
-        "chatId": "={{ $json._approval_chat_id }}",
-        "text": "={{ '\ud83d\udd10 *Approval Required*\n\n*Action:* ' + $json.action.name + '\n*Target:* ' + $json.action.target_system + '\n*Risk:* ' + $json.risk.level + '\n*Requested by:* ' + ($json.requester.display_name ?? $json.requester.user_id) + '\n*Intent:* ' + $json.intent.title + '\n*Channel:* ' + $json.requester.channel + '\n\n*Proposed Action ID:* ' + $json.id + '\n\nReply with the ID above followed by APPROVE or DENY.' }}",
-        "additionalFields": { "parse_mode": "Markdown" }
-      },
-      "id": "telegram-approval-request",
-      "name": "Telegram \u2014 Request Approval",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
-      "position": [1920, 80],
-      "webhookId": "eea10096-89bc-42ea-8fdd-60442f9aa5b2",
-      "credentials": {
-        "telegramApi": {
-          "id": "PEBibW77iTJCpA8B",
-          "name": "Telegram account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ status: 'pending-approval', proposed_action_id: $('Approval Guard').first().json.id, message: 'Action requires approval. Analyst has been notified via Telegram.' }) }}",
-        "options": { "responseCode": 202 }
-      },
-      "id": "respond-pending",
-      "name": "Respond 202 Pending",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [2160, 80]
     }
   ],
-  "pinData": {},
   "connections": {
-    "Webhook \u2014 Receive ProposedAction": { "main": [[{ "node": "Validate Schema", "type": "main", "index": 0 }]] },
+    "Webhook — Receive ProposedAction": { "main": [[{ "node": "Validate Schema", "type": "main", "index": 0 }]] },
     "Validate Schema": { "main": [[{ "node": "Schema Valid?", "type": "main", "index": 0 }]] },
     "Schema Valid?": {
       "main": [
@@ -349,31 +430,25 @@
       "main": [
         [{ "node": "Map to Sandbox Workflow", "type": "main", "index": 0 }],
         [{ "node": "Build Deny Response", "type": "main", "index": 0 }],
-        [{ "node": "Approval Guard", "type": "main", "index": 0 }]
+        [{ "node": "Capability Guard — Telegram", "type": "main", "index": 0 }]
       ]
     },
+    "Capability Guard — Telegram": { "main": [[{ "node": "Guard — Telegram Ready?", "type": "main", "index": 0 }]] },
+    "Guard — Telegram Ready?": {
+      "main": [
+        [{ "node": "Telegram — Request Approval", "type": "main", "index": 0 }],
+        [{ "node": "Log Guard Failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Guard Failure": { "main": [[{ "node": "Telegram — Operator Alert (Guard Failure)", "type": "main", "index": 0 }]] },
     "Map to Sandbox Workflow": { "main": [[{ "node": "Execute Sandbox Workflow", "type": "main", "index": 0 }]] },
     "Execute Sandbox Workflow": { "main": [[{ "node": "Normalise Response", "type": "main", "index": 0 }]] },
     "Normalise Response": { "main": [[{ "node": "Write Audit Log", "type": "main", "index": 0 }]] },
     "Write Audit Log": { "main": [[{ "node": "Respond 200 Success", "type": "main", "index": 0 }]] },
     "Build Deny Response": { "main": [[{ "node": "Write Audit Log (Deny)", "type": "main", "index": 0 }]] },
     "Write Audit Log (Deny)": { "main": [[{ "node": "Respond 403 Denied", "type": "main", "index": 0 }]] },
-    "Approval Guard": { "main": [[{ "node": "Telegram \u2014 Request Approval", "type": "main", "index": 0 }]] },
-    "Telegram \u2014 Request Approval": { "main": [[{ "node": "Respond 202 Pending", "type": "main", "index": 0 }]] }
+    "Telegram — Request Approval": { "main": [[{ "node": "Respond 202 Pending", "type": "main", "index": 0 }]] }
   },
-  "active": true,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate",
-    "callerPolicy": "any",
-    "saveManualExecutions": true,
-    "saveDataSuccessExecution": "all",
-    "saveDataErrorExecution": "all",
-    "availableInMCP": true,
-    "timeSavedMode": "fixed"
-  },
-  "versionId": "d2b3c4d5-e6f7-4a8b-9c0d-1e2f3a4b5c6d",
-  "meta": { "instanceId": "c8a2709b949a2d6e46ab3c68e4e965bc396c0a55d9206e4fa8ee9927c92b07c8" },
-  "id": "ap66ZptIy180B0w8",
-  "tags": []
+  "active": false,
+  "tags": ["yaoc2", "gateway", "policy", "nemoclaw"]
 }
