@@ -13,7 +13,7 @@ not a Docker deployment.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────────────────────┐
 │  PROXMOX VE HOST                                                 │
 │                                                                  │
 │  ┌─────────────┐  ┌──────────────────────┐  ┌───────────────┐  │
@@ -22,7 +22,7 @@ not a Docker deployment.
 │  │ :80/:443    │  │                      │  │  systemd n8n  │  │
 │  │ *.lab.local │  │  infra-postgres:5432 │  │  :5678        │  │
 │  │             │  │  infra-valkey:6379   │◄─┤               │  │
-│  └──────┬──────┘  │  es7/es8             │  │  /opt/n8n.env │  │
+│  └──────┬─────┘  │  es7/es8             │  │  /opt/n8n.env │  │
 │         │         │                      │  └───────────────┘  │
 │         │         │  misp, opencti       │                      │
 │         │         │  thehive, dfir-iris  │  ┌───────────────┐  │
@@ -37,13 +37,84 @@ not a Docker deployment.
 │         │                                    └───────────────┘  │
 │                                                                  │
 │  DNS: *.lab.local CNAMEs → caddy.lab.local (single A record)    │
-└─────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 **Integration model:** n8n workflows call CTI tools over HTTP API using
 `*.lab.local` Caddy domain names. All cross-LXC communication is via
 HTTP/REST. n8n connects directly to `infra-postgres` on the dockge-cti
 LXC over port 5432 on the shared VLAN.
+
+---
+
+## Architecture & Integration with YAOC2
+
+`n8n-ecosystem-unified` is the **shared AI platform**: a collection of generic n8n workflows that
+provide multi-channel routing, tiered model selection, and autonomous agents. It is designed to be
+**YAOC2-agnostic** but plugs into the [YAOC2](https://github.com/JazenaYLA/YAOC2) gateway via a
+small, well-defined contract.
+
+### Layers in This Repo
+
+**1. Core Engine (`workflows/freddy/`)**
+
+Upstream n8n-claw engine workflows: main orchestrator agent, sub-agent runner, MCP builder/client,
+memory consolidation, workflow builder, etc. These flows are generic and must not contain
+YAOC2-specific logic.
+
+**2. Multi-Channel + Monolith Reference (`workflows/shabbir/`)**
+
+`shabbir/n8nClaw.json` — Shabbir's monolithic multi-channel workflow (Telegram + WhatsApp + Email +
+Heartbeat + multiple worker agents). Kept as a reference; not directly modified.
+
+**3. Unified Custom Layer (`workflows/unified/`)**
+
+| Workflow | Purpose |
+|---|---|
+| `unified/multi-channel-router.json` | Receives Telegram/WhatsApp (and future Discord/Slack), normalises them into `{ userMessage, chatId, userId, source }`, calls the Tiered Model Router, and routes responses back to the correct channel. |
+| `unified/tiered-model-router.json` | Routes tasks to Claude Haiku/Sonnet/Opus by complexity score (1–10). All three agents share Window Buffer memory, SearXNG web search, and YAOC2 MCP tools. |
+| `unified/email-manager.json` | Polls unread Gmail, classifies emails, replies/drafts/deletes under strict security guardrails, logs to Supabase. |
+
+### How This Repo Integrates with YAOC2
+
+**Ingress**
+
+[YAOC2](https://github.com/JazenaYLA/YAOC2) Receptionists forward normalised messages to a Brain
+workflow that calls `unified/multi-channel-router.json` (or a YAOC2-specific wrapper around it).
+
+Message envelope shape from YAOC2 Receptionists:
+
+```json
+{
+  "userMessage": "string",
+  "chatId": "string",
+  "userId": "string",
+  "source": "telegram|whatsapp|discord|slack",
+  "metadata": { "raw": { "...": "..." } }
+}
+```
+
+**Reasoning Output**
+
+The Tiered Model Router produces `{ output, tier, complexity }`. For YAOC2, an additional
+"intent → ProposedAction mapper" workflow (kept in the YAOC2 repo) converts this output into a full
+`ProposedAction` object for the Policy Gateway.
+
+**Tools (MCP)**
+
+The Brain's agents call YAOC2-controlled CTI tools only via MCP:
+
+- MCP endpoint: `https://gateway.lab.threatresearcher.net/rest/mcp/sse`
+- Auth: `Authorization: Bearer {{ $env.GATEWAY_MCP_TOKEN }}`
+- Store the token in `/opt/n8n.env` on the Brain LXC; rotate via Infisical.
+- From this repo's perspective these are generic virtual tools (`misp_enrich`, `opencti_sync`, etc.).
+  The actual implementations live as sandbox workflows in the YAOC2 repo.
+
+**Design Principles**
+
+- This repo is **reusable and product-agnostic** — no YAOC2-specific URLs, policy sets, or CTI details are hardcoded here.
+- All secrets (OpenRouter API keys, MCP JWTs, Supabase keys, Gmail credentials, Telegram IDs) must be pulled from environment variables or a secret manager, never committed to git.
+- Product-specific behaviour (e.g., what to do with an IOC enrichment request) belongs in the YAOC2 repo, not here.
 
 ---
 
@@ -194,8 +265,9 @@ The stack is **LLM-agnostic**. All model calls route through n8n credentials.
 | **OpenAI** | OpenAI API | Cloud |
 | **Mistral** | HTTP Header Auth | Cloud |
 
-The **Tiered Model Router** workflow selects provider by task complexity
-(score 1–10): local/Ollama ≤3, mid-tier 4–6, heavyweight ≥7.
+The **Tiered Model Router** workflow selects model by task complexity
+(score 1–10): Haiku ≤3, Sonnet 4–7, Opus ≥8. Complexity is derived
+automatically from task keywords if not provided explicitly.
 
 ---
 
@@ -217,6 +289,7 @@ See `docs/FLOWISE_SETUP.md`.
 | Repo | Purpose |
 |---|---|
 | [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack) | CTI platform stack — hosts infra-postgres and all CTI tools |
+| [YAOC2](https://github.com/JazenaYLA/YAOC2) | Policy-governed CTI bridge built on top of this platform |
 | [n8n-claw-templates](https://github.com/JazenaYLA/n8n-claw-templates) | n8n MCP skill template library (CTI + general) |
 
 ---
