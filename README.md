@@ -8,6 +8,12 @@ n8n is installed as a **native systemd service** on a dedicated LXC using the
 This repo provides configuration guides, migration scripts, and workflow files —
 not a Docker deployment.
 
+> **No ngrok or tunnel dependency.** This repo runs entirely on the internal network.
+> Public webhook ingress (Telegram, WhatsApp) is handled by the YAOC2 gateway sidecar.
+> See [YAOC2 — ngrok & Tunnel Management](https://github.com/JazenaYLA/YAOC2#ngrok--tunnel-management)
+> for the full tunnel setup, Heartbeat v1.2 loop, Ghost 404 workaround, and Cloudflare Tunnel
+> migration path.
+
 ---
 
 ## Architecture
@@ -53,6 +59,21 @@ LXC over port 5432 on the shared VLAN.
 provide multi-channel routing, tiered model selection, and autonomous agents. It is designed to be
 **YAOC2-agnostic** but plugs into the [YAOC2](https://github.com/JazenaYLA/YAOC2) gateway via a
 small, well-defined contract.
+
+### Tunnel & Public Webhook Boundary
+
+This repo runs **entirely on the internal network**. It does not manage ngrok, Cloudflare Tunnel,
+or any public-facing webhook registration. That responsibility belongs entirely to YAOC2:
+
+- The YAOC2 `yaoc2-gateway` Docker stack runs an **ngrok sidecar** (currently) that provides the
+  public HTTPS URL Telegram and WhatsApp need to deliver webhooks.
+- YAOC2's `heartbeat.json` (v1.2) keeps those webhook registrations alive across tunnel restarts
+  and fixes n8n Ghost 404 deregistration bugs by bouncing receptionist workflows via the n8n API.
+- When YAOC2 migrates to Cloudflare Tunnel or a static port-forward, the workflows in *this* repo
+  require no changes — only the YAOC2 gateway stack changes.
+
+See [YAOC2 — ngrok & Tunnel Management](https://github.com/JazenaYLA/YAOC2#ngrok--tunnel-management)
+for the complete setup, env vars, and migration path.
 
 ### Layers in This Repo
 
@@ -112,9 +133,10 @@ The Brain's agents call YAOC2-controlled CTI tools only via MCP:
 
 **Design Principles**
 
-- This repo is **reusable and product-agnostic** — no YAOC2-specific URLs, policy sets, or CTI details are hardcoded here.
+- This repo is **reusable and product-agnostic** — no YAOC2-specific URLs, policy sets, CTI details, or tunnel config are hardcoded here.
 - All secrets (OpenRouter API keys, MCP JWTs, Supabase keys, Gmail credentials, Telegram IDs) must be pulled from environment variables or a secret manager, never committed to git.
 - Product-specific behaviour (e.g., what to do with an IOC enrichment request) belongs in the YAOC2 repo, not here.
+- Public webhook ingress and tunnel management belong in YAOC2, not here.
 
 ---
 
@@ -289,7 +311,7 @@ See `docs/FLOWISE_SETUP.md`.
 | Repo | Purpose |
 |---|---|
 | [threatlabs-cti-stack](https://github.com/JazenaYLA/threatlabs-cti-stack) | CTI platform stack — hosts infra-postgres and all CTI tools |
-| [YAOC2](https://github.com/JazenaYLA/YAOC2) | Policy-governed CTI bridge built on top of this platform |
+| [YAOC2](https://github.com/JazenaYLA/YAOC2) | Policy-governed CTI bridge built on top of this platform (owns ngrok/tunnel config) |
 | [n8n-claw-templates](https://github.com/JazenaYLA/n8n-claw-templates) | n8n MCP skill template library (CTI + general) |
 
 ---
